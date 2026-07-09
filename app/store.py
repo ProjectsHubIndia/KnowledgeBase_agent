@@ -134,18 +134,46 @@ def list_invoices() -> list[dict]:
 
 
 def _month_of(row: dict) -> str:
-    return str(row.get("invoice_date") or "")[:7] or "unknown"
+    """Invoice month as yyyy-mm, tolerant of ISO (2026-04-20) and
+    day-first (20/04/2026 or 20-04-2026) date strings."""
+    d = str(row.get("invoice_date") or "").strip()
+    if re.match(r"^\d{4}-\d{2}", d):  # ISO yyyy-mm-dd
+        return d[:7]
+    m = re.match(r"^(\d{1,2})[/-](\d{1,2})[/-](\d{4})", d)  # dd/mm/yyyy
+    if m:
+        return f"{m.group(3)}-{int(m.group(2)):02d}"
+    return d[:7] or "unknown"
+
+
+def _year_of(row: dict) -> str:
+    """Invoice year as yyyy, from any recognizable date string."""
+    d = str(row.get("invoice_date") or "")
+    if re.match(r"^\d{4}-", d):  # ISO
+        return d[:4]
+    m = re.search(r"\d{4}", d)  # any 4-digit year (e.g. dd/mm/yyyy)
+    return m.group(0) if m else "unknown"
+
+
+def _key_of(row: dict, field: str) -> str:
+    """Value used for grouping/filtering by `field`. Supports the virtual
+    'month' (yyyy-mm) and 'year' (yyyy); everything else is a raw field."""
+    if field == "month":
+        return _month_of(row)
+    if field == "year":
+        return _year_of(row)
+    return str(row.get(field) or "")
 
 
 def _matches(row: dict, where: dict | None) -> bool:
     """Case-insensitive equality filter. Keys are frontmatter fields
-    (buyer_state, seller_state, currency, …) or the virtual "month" (yyyy-mm)."""
+    (buyer_state, seller_state, currency, …) or the virtual "month"
+    (yyyy-mm) / "year" (yyyy)."""
     if not where:
         return True
     for key, val in where.items():
         if val in (None, ""):
             continue
-        actual = _month_of(row) if key == "month" else str(row.get(key) or "")
+        actual = _key_of(row, key)
         if actual.strip().lower() != str(val).strip().lower():
             return False
     return True
@@ -189,13 +217,13 @@ def aggregate(
 
     groups: dict[str, float] = {}
     for r in rows:
-        key = _month_of(r) if group_by == "month" else str(r.get(group_by) or "unknown")
+        key = _key_of(r, group_by) or "unknown"
         groups[key] = round(groups.get(key, 0.0) + value_of(r), 2)
 
-    # Months read best chronologically; other groupings by descending value.
+    # Dates read best chronologically; other groupings by descending value.
     items = sorted(
         groups.items(),
-        key=(lambda kv: kv[0]) if group_by == "month" else (lambda kv: -kv[1]),
+        key=(lambda kv: kv[0]) if group_by in ("month", "year") else (lambda kv: -kv[1]),
     )
     return {
         "metric": metric,

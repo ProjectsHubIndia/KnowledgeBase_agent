@@ -34,7 +34,11 @@ SYSTEM_PROMPT = (
     'place of supply). For "monthly growth" use group_by=month. For a question '
     'about ONE state over time (e.g. "Karnataka by month") you MUST filter: '
     'where={"buyer_state":"Karnataka"} with group_by=month — never use the '
-    "unfiltered monthly totals.\n"
+    "unfiltered monthly totals. To restrict to a year, filter "
+    'where={"year":"2026"} (the year is derived from invoice_date; do NOT '
+    'filter where={"invoice_date":"2026"} — that matches nothing). For a '
+    '"YEAR pie chart" (e.g. amount vs tax for 2026) filter where={"year":"2026"} '
+    "and read the returned totals.\n"
     "- `render_chart(chart_type, title, labels, values)`: draw a pie/line/bar "
     "chart. Pass the labels and values returned by aggregate_invoices verbatim.\n"
     "- `list_invoices`: raw fields of every invoice — only for inspecting or "
@@ -97,8 +101,8 @@ TOOLS = [
                         "description": (
                             "Any invoice field to break the result down by — e.g. "
                             "buyer_state, seller_state, buyer_city, seller_city, "
-                            "buyer_name, currency, or 'month' (groups invoice_date "
-                            "by yyyy-mm). Omit for a grand total."
+                            "buyer_name, currency, 'month' (groups invoice_date by "
+                            "yyyy-mm) or 'year' (yyyy). Omit for a grand total."
                         ),
                     },
                     "where": {
@@ -106,7 +110,9 @@ TOOLS = [
                         "description": (
                             "Optional equality filters on any field(s), e.g. "
                             '{"buyer_state": "Karnataka"} or {"month": "2026-02"} '
-                            'or {"buyer_city": "Ahmedabad"}.'
+                            'or {"year": "2026"} or {"buyer_city": "Ahmedabad"}. '
+                            'For a whole year use {"year": "2026"} (NOT '
+                            '{"invoice_date": "2026"}).'
                         ),
                         "additionalProperties": {"type": "string"},
                     },
