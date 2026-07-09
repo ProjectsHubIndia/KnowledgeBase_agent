@@ -1,0 +1,74 @@
+============================================================
+  FINANCE AGENT — LINUX SERVER DEPLOY  (low-memory, ~500 MB box)
+============================================================
+
+Run these on the server over SSH. Oracle Linux (opc user) assumed.
+This is a single-user, light-use setup. Expect it to be slow-ish.
+
+------------------------------------------------------------
+STEP 1 — ADD 2 GB SWAP  (critical on 500 MB RAM)
+------------------------------------------------------------
+  sudo fallocate -l 2G /swapfile
+  sudo chmod 600 /swapfile
+  sudo mkswap /swapfile
+  sudo swapon /swapfile
+  echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+  free -h        # confirm Swap is now ~2.5G
+
+------------------------------------------------------------
+STEP 2 — INSTALL DOCKER  (one time)
+------------------------------------------------------------
+  sudo dnf install -y dnf-utils
+  sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+  sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+  sudo systemctl enable --now docker
+  sudo usermod -aG docker opc
+  # log out and back in so the 'opc' user can run docker without sudo
+  exit
+  # (ssh back in)
+
+------------------------------------------------------------
+STEP 3 — OPEN PORT 9000
+------------------------------------------------------------
+  A) In the Oracle Cloud console: your VCN > Security List (or the
+     instance's NSG) > add an INGRESS rule:
+         Source 0.0.0.0/0 , TCP , destination port 9000
+  B) On the server firewall:
+     sudo firewall-cmd --permanent --add-port=9000/tcp && sudo firewall-cmd --reload
+     # If firewalld isn't running, use iptables instead:
+     # sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 9000 -j ACCEPT
+     # sudo bash -c 'iptables-save > /etc/sysconfig/iptables'
+
+------------------------------------------------------------
+STEP 4 — PUT THE FILES ON THE SERVER
+------------------------------------------------------------
+  Create a folder, e.g. ~/finance-agent, and place in it:
+     docker-compose.server.yml
+     .env            (copy .env.example -> .env, put your OpenAI key in)
+  From your laptop you can copy them up with scp, e.g.:
+     scp -i <key> docker-compose.server.yml .env opc@<server-ip>:~/finance-agent/
+
+------------------------------------------------------------
+STEP 5 — START IT
+------------------------------------------------------------
+  cd ~/finance-agent
+  docker compose -f docker-compose.server.yml up -d
+  docker compose -f docker-compose.server.yml ps      # both should be Up
+  Open:  http://<server-ip>:9000
+
+------------------------------------------------------------
+UPDATE LATER (new image)
+------------------------------------------------------------
+  cd ~/finance-agent
+  docker compose -f docker-compose.server.yml pull
+  docker compose -f docker-compose.server.yml up -d
+  docker image prune -f        # remove the old image (keeps data)
+
+------------------------------------------------------------
+IF IT'S SLUGGISH OR CRASHES
+------------------------------------------------------------
+  - Upload ONE file at a time (bulk parsing is capped to 1 already).
+  - Check memory:  free -h   and   docker stats
+  - This box is at its limit. A bigger instance (2+ GB) removes all of
+    this pain — this tuning is only to survive on 500 MB.
+============================================================

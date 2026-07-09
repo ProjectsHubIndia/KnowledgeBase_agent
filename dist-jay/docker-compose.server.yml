@@ -1,0 +1,57 @@
+# Finance Agent — LOW-MEMORY server deploy (≈500 MB RAM box).
+#
+# Differences from the desktop compose:
+#   - Postgres is tuned tiny (shared_buffers 32 MB, few connections).
+#   - Hard memory limits so a spike can't take the whole box down.
+#   - BULK_CONCURRENCY=1 so uploads parse one-at-a-time (no parallel RAM spike).
+#
+# REQUIRES a swap file first (see SERVER-DEPLOY.txt). Single-user, light use.
+#
+#   docker compose -f docker-compose.server.yml up -d
+#   open http://<server-ip>:9000
+
+services:
+  db:
+    image: pgvector/pgvector:0.8.0-pg16
+    command: >
+      postgres
+      -c shared_buffers=32MB
+      -c max_connections=20
+      -c effective_cache_size=128MB
+      -c work_mem=2MB
+      -c maintenance_work_mem=16MB
+      -c max_worker_processes=2
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: agentvector
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d agentvector"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: 160m
+    memswap_limit: 512m
+    restart: unless-stopped
+
+  app:
+    image: bhutiyalakhan/jay_ai_agent:latest
+    ports:
+      - "9000:9001"
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/agentvector
+      BULK_CONCURRENCY: "1"   # parse uploads one at a time on tiny RAM
+    volumes:
+      - ./invoice_data:/app/invoice_data
+    mem_limit: 380m
+    memswap_limit: 1g
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
