@@ -54,6 +54,10 @@ $("#login-form").addEventListener("submit", async (e) => {
   }
   sessionStorage.setItem(AUTH_KEY, token);
   sessionStorage.setItem(AUTH_USER_KEY, username);
+  // Also store the token in a cookie so browser-native requests (iframe/img
+  // src, download links like /original) are authenticated — those can't carry
+  // the Authorization header the fetch wrapper adds.
+  document.cookie = `fa_auth=${token}; path=/; max-age=86400; SameSite=Strict`;
   showApp();
   init();
 });
@@ -61,6 +65,7 @@ $("#login-form").addEventListener("submit", async (e) => {
 $("#logout-btn").addEventListener("click", () => {
   sessionStorage.removeItem(AUTH_KEY);
   sessionStorage.removeItem(AUTH_USER_KEY);
+  document.cookie = "fa_auth=; path=/; max-age=0; SameSite=Strict";
   location.reload();
 });
 
@@ -1504,10 +1509,14 @@ async function init() {
 async function boot() {
   const token = sessionStorage.getItem(AUTH_KEY);
   if (token && (await checkAuth(token))) {
+    // Refresh the cookie so browser-native requests (previews/downloads) stay
+    // authenticated after a page reload, not just right after login.
+    document.cookie = `fa_auth=${token}; path=/; max-age=86400; SameSite=Strict`;
     showApp();
     init();
   } else {
     sessionStorage.removeItem(AUTH_KEY);
+    document.cookie = "fa_auth=; path=/; max-age=0; SameSite=Strict";
     showLogin();
   }
 }

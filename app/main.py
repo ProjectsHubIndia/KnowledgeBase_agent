@@ -76,17 +76,21 @@ async def require_auth(request: Request, call_next):
 
     index.html and /static stay public so the login form itself can load;
     the JS attaches a Basic-auth header (from the custom login form, not the
-    native browser prompt) to every API call it makes.
+    native browser prompt) to every API call it makes. It ALSO stores the same
+    token in an `fa_auth` cookie, so browser-native requests that can't carry a
+    custom header — iframe/img `src`, download links (e.g. an invoice's
+    /original) — are authenticated too.
     """
     path = request.url.path
     if path == "/" or path.startswith("/static"):
         return await call_next(request)
 
     auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Basic "):
+    token = auth[6:] if auth.startswith("Basic ") else request.cookies.get("fa_auth")
+    if not token:
         return JSONResponse({"detail": "Unauthorized"}, status_code=401)
     try:
-        username, _, password = base64.b64decode(auth[6:]).decode().partition(":")
+        username, _, password = base64.b64decode(token).decode().partition(":")
     except Exception:
         return JSONResponse({"detail": "Unauthorized"}, status_code=401)
 
