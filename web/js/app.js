@@ -7,6 +7,79 @@ const PREVIEW_WIDTH_KEY = "invoice-agent.previewWidth";
 let sessionId = localStorage.getItem(SESSION_KEY) || null;
 let currentPreview = null; // name of the invoice currently shown in the dock
 
+/* ---------- auth (single shared login, see /health-gated middleware) ---------- */
+const AUTH_KEY = "invoice-agent.auth"; // sessionStorage: base64(user:pass)
+const AUTH_USER_KEY = "invoice-agent.authUser";
+
+const rawFetch = window.fetch.bind(window);
+window.fetch = (input, opts = {}) => {
+  const token = sessionStorage.getItem(AUTH_KEY);
+  if (!token) return rawFetch(input, opts);
+  const headers = new Headers(opts.headers || {});
+  headers.set("Authorization", `Basic ${token}`);
+  return rawFetch(input, { ...opts, headers });
+};
+
+async function checkAuth(token) {
+  const r = await rawFetch("/health", { headers: { Authorization: `Basic ${token}` } });
+  return r.ok;
+}
+
+function showApp() {
+  $("#login-overlay").classList.add("hidden");
+  $("#app-shell").classList.remove("hidden");
+  const username = sessionStorage.getItem(AUTH_USER_KEY) || "";
+  $("#profile-name").textContent = username || "Account";
+  $("#profile-avatar").textContent = username.slice(0, 2) || "?";
+}
+
+function showLogin() {
+  $("#app-shell").classList.add("hidden");
+  $("#login-overlay").classList.remove("hidden");
+  $("#profile-menu").classList.add("hidden");
+}
+
+$("#login-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const username = $("#login-username").value;
+  const token = btoa(`${username}:${$("#login-password").value}`);
+  const submit = $("#login-submit");
+  submit.disabled = true;
+  $("#login-error").classList.add("hidden");
+  const ok = await checkAuth(token);
+  submit.disabled = false;
+  if (!ok) {
+    $("#login-error").classList.remove("hidden");
+    return;
+  }
+  sessionStorage.setItem(AUTH_KEY, token);
+  sessionStorage.setItem(AUTH_USER_KEY, username);
+  showApp();
+  init();
+});
+
+$("#logout-btn").addEventListener("click", () => {
+  sessionStorage.removeItem(AUTH_KEY);
+  sessionStorage.removeItem(AUTH_USER_KEY);
+  location.reload();
+});
+
+/* ---------- account menu (bottom of history panel) ---------- */
+$("#profile-card").addEventListener("click", (e) => {
+  e.stopPropagation();
+  $("#profile-menu").classList.toggle("hidden");
+});
+document.addEventListener("click", (e) => {
+  if (!$("#history-profile").contains(e.target)) $("#profile-menu").classList.add("hidden");
+});
+
+/* ---------- history collapse/expand ---------- */
+$("#history-toggle").addEventListener("click", () => {
+  const collapsed = $("#history-panel").classList.toggle("collapsed");
+  $("#app-layout").classList.toggle("history-collapsed", collapsed);
+  $("#history-toggle").setAttribute("aria-expanded", String(!collapsed));
+});
+
 /* ---------- tiny DOM helper ---------- */
 function el(tag, className) {
   const node = document.createElement(tag);
@@ -1427,4 +1500,15 @@ async function init() {
   ping();
   setInterval(ping, 15000);
 }
-init();
+
+async function boot() {
+  const token = sessionStorage.getItem(AUTH_KEY);
+  if (token && (await checkAuth(token))) {
+    showApp();
+    init();
+  } else {
+    sessionStorage.removeItem(AUTH_KEY);
+    showLogin();
+  }
+}
+boot();

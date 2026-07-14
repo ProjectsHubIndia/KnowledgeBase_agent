@@ -1,5 +1,7 @@
 import asyncio
+import base64
 import mimetypes
+import secrets
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -66,6 +68,34 @@ async def no_cache_frontend(request: Request, call_next):
     if path == "/" or path.startswith("/static"):
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return response
+
+
+@app.middleware("http")
+async def require_auth(request: Request, call_next):
+    """Guard every route except the SPA shell with the shared login.
+
+    index.html and /static stay public so the login form itself can load;
+    the JS attaches a Basic-auth header (from the custom login form, not the
+    native browser prompt) to every API call it makes.
+    """
+    path = request.url.path
+    if path == "/" or path.startswith("/static"):
+        return await call_next(request)
+
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Basic "):
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    try:
+        username, _, password = base64.b64decode(auth[6:]).decode().partition(":")
+    except Exception:
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+
+    valid = secrets.compare_digest(
+        username, settings.auth_username
+    ) and secrets.compare_digest(password, settings.auth_password)
+    if not valid:
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    return await call_next(request)
 
 
 @app.exception_handler(APIError)

@@ -25,6 +25,10 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://postgres:postgres@localhost:9432/agentvector"
     )
 
+    # Shared login for the web app + API (single account, no user table).
+    auth_username: str = Field(validation_alias="AUTH_USERNAME")
+    auth_password: str = Field(validation_alias="AUTH_PASSWORD")
+
     # Conversation sessions
     history_turns: int = 6  # how many prior user/assistant turns to replay
 

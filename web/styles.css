@@ -26,6 +26,13 @@ body {
   display: flex;
   flex-direction: column;
 }
+#app-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+#app-shell.hidden { display: none !important; }
 .wordmark {
   display: flex;
   align-items: center;
@@ -73,6 +80,7 @@ body {
   min-height: 0;
   display: grid;
   grid-template-columns: 260px 360px 1fr;
+  grid-template-rows: minmax(0, 1fr);
   gap: 0;
 }
 
@@ -211,6 +219,36 @@ body {
 }
 .history-head .panel-title { font-size: 18px; }
 .history-head .btn--ghost { padding: 6px 12px; font-size: 12px; }
+.history-head-actions { display: flex; align-items: center; gap: 6px; }
+.history-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  background: none;
+  border: 1.5px solid transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+  padding: 0;
+  border-radius: 4px;
+}
+.history-toggle:hover { background: var(--field); border-color: var(--line-faint); }
+
+/* Collapsed = thin icon rail: hide everything except the toggle + avatar. */
+.panel--history.collapsed { padding: 22px 8px; align-items: center; }
+.panel--history.collapsed .history-head { flex-direction: column-reverse; gap: 10px; }
+.panel--history.collapsed .panel-title,
+.panel--history.collapsed #new-chat,
+.panel--history.collapsed .history-body,
+.panel--history.collapsed .profile-info,
+.panel--history.collapsed .profile-chevron { display: none; }
+.panel--history.collapsed .profile-card { justify-content: center; padding: 8px 0; }
+.panel--history.collapsed .history-profile { border-top: none; }
+
+.layout.history-collapsed { grid-template-columns: 64px 360px 1fr; }
+
+.history-body { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .session-list {
   flex: 1;
   min-height: 0;
@@ -218,6 +256,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-faint) transparent;
 }
 .session-empty {
   font-size: 12.5px;
@@ -281,6 +321,95 @@ body {
 .session-item:focus-within .session-del { opacity: 1; }
 .session-del:hover { color: var(--paper); background: var(--ink); }
 .session-del svg { display: block; }
+
+/* Bottom-of-sidebar account card (avatar + name + logout menu). */
+.history-profile {
+  position: relative;
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1.5px solid var(--line-faint);
+}
+.profile-card {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: none;
+  border: none;
+  padding: 8px;
+  cursor: pointer;
+  text-align: left;
+  border-radius: 6px;
+}
+.profile-card:hover { background: var(--field); }
+.profile-avatar {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--paper);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.profile-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.profile-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.profile-sub {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.profile-chevron { color: var(--muted); font-size: 14px; }
+.profile-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 8px;
+  right: 8px;
+  background: var(--paper);
+  border: 1px solid var(--line-faint);
+  border-radius: 10px;
+  padding: 5px;
+  z-index: 10;
+  animation: pop 0.14s ease;
+}
+.profile-menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.profile-menu-item svg { flex-shrink: 0; color: var(--muted); }
+.profile-menu-item:hover { background: var(--field); }
+.profile-menu-item:hover svg { color: var(--ink); }
 
 .panel-head { margin-bottom: 20px; }
 .panel-title { margin: 0; font-family: var(--serif); font-weight: 500; font-size: 21px; }
@@ -805,6 +934,26 @@ body {
 .modal-actions--three { flex-wrap: wrap; }
 .modal-actions--three .btn { flex: 1; min-width: 90px; }
 #dup-overlay .modal { max-width: 460px; }
+
+#login-overlay .modal { max-width: 360px; }
+.login-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 18px;
+}
+.login-input {
+  font-family: var(--sans);
+  font-size: 14px;
+  padding: 10px 12px;
+  border: 1.5px solid var(--line-faint);
+  background: var(--field);
+  color: var(--ink);
+}
+.login-input:focus { outline: none; border-color: var(--ink); }
+.login-error { color: #b3261e; }
+#login-overlay .modal-actions { justify-content: stretch; }
+#login-overlay .modal-actions .btn { flex: 1; }
 
 .hidden { display: none !important; }
 
