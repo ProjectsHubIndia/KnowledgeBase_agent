@@ -52,3 +52,79 @@ class MessageOut(BaseModel):
     sources: list[str] = []
     aggregated: list[str] = []
     doc_sources: list[str] = []
+
+
+# ---------- auth ----------
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class UserOut(BaseModel):
+    id: str
+    username: str
+    role: str
+    is_active: bool = True
+    created_at: str | None = None
+    agent_ids: list[str] = []  # populated by the admin listing only
+
+
+class AgentSummary(BaseModel):
+    """What a user needs to pick an agent — no system prompt."""
+
+    id: str
+    slug: str
+    name: str
+    description: str | None = None
+
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserOut
+    agents: list[AgentSummary] = []
+
+
+class MeResponse(BaseModel):
+    user: UserOut
+    agents: list[AgentSummary] = []
+
+
+# ---------- admin ----------
+class AgentOut(AgentSummary):
+    """Full agent record for the admin console, including the editable prompt."""
+
+    system_prompt: str
+    is_active: bool = True
+    invoice_count: int = 0
+    document_count: int = 0
+
+
+class AgentCreate(BaseModel):
+    name: str
+    description: str | None = None
+    system_prompt: str | None = None  # falls back to the default persona
+
+
+class AgentUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    system_prompt: str | None = None
+    is_active: bool | None = None
+
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    role: Literal["admin", "user"] = "user"
+    agent_ids: list[str] = []
+
+
+class UserUpdate(BaseModel):
+    password: str | None = None
+    role: Literal["admin", "user"] | None = None
+    is_active: bool | None = None
+
+
+class GrantsUpdate(BaseModel):
+    agent_ids: list[str] = []

@@ -46,6 +46,11 @@
           </button>
         </div>
       </div>
+      <div class="agent-bar">
+        <label class="agent-label" for="agent-picker">Agent</label>
+        <select id="agent-picker" class="agent-picker"></select>
+        <p id="agent-empty" class="agent-empty hidden">No agents have been assigned to you yet.</p>
+      </div>
       <div id="history-body" class="history-body">
         <div id="session-list" class="session-list">
           <p class="session-empty">No conversations yet.</p>
@@ -56,11 +61,18 @@
           <span class="profile-avatar" id="profile-avatar">?</span>
           <span class="profile-info">
             <span class="profile-name" id="profile-name">—</span>
-            <span class="profile-sub">Signed in</span>
+            <span class="profile-sub" id="profile-role">Signed in</span>
           </span>
           <span class="profile-chevron" aria-hidden="true">⋮</span>
         </button>
         <div class="profile-menu hidden" id="profile-menu">
+          <a id="admin-link" class="profile-menu-item hidden" href="/admin">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M8 1.5 2.5 4v4c0 3.2 2.3 5.6 5.5 6.5 3.2-.9 5.5-3.3 5.5-6.5V4L8 1.5Z" stroke="currentColor"
+                stroke-width="1.3" stroke-linejoin="round" />
+            </svg>
+            Admin console
+          </a>
           <button id="logout-btn" class="profile-menu-item" type="button">
             <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
               <path d="M6.5 2H3a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3.5" stroke="currentColor" stroke-width="1.3"

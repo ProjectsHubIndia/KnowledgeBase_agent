@@ -7,9 +7,12 @@ from app.config import settings
 from app.db import ChatSession, Message
 
 
-async def list_sessions(session: AsyncSession) -> list[dict]:
-    """All sessions that have at least one message, newest activity first,
-    each with a title (first user message) and message count."""
+async def list_sessions(
+    session: AsyncSession, user_id: str, agent_id: str
+) -> list[dict]:
+    """The caller's conversations with ONE agent that have at least one message,
+    newest activity first, each with a title (first user message) and message
+    count. Scoped to the owner so users never see each other's chats."""
     # Per-session aggregates: message count and most-recent message time.
     agg = (
         select(
@@ -22,7 +25,13 @@ async def list_sessions(session: AsyncSession) -> list[dict]:
     )
     rows = (
         await session.execute(
-            select(agg.c.sid, agg.c.n, agg.c.last).order_by(agg.c.last.desc())
+            select(agg.c.sid, agg.c.n, agg.c.last)
+            .join(ChatSession, ChatSession.id == agg.c.sid)
+            .where(
+                ChatSession.user_id == user_id,
+                ChatSession.agent_id == agent_id,
+            )
+            .order_by(agg.c.last.desc())
         )
     ).all()
 
@@ -45,8 +54,10 @@ async def list_sessions(session: AsyncSession) -> list[dict]:
     return summaries
 
 
-async def create_session(session: AsyncSession) -> str:
-    chat = ChatSession()
+async def create_session(
+    session: AsyncSession, user_id: str, agent_id: str
+) -> str:
+    chat = ChatSession(user_id=user_id, agent_id=agent_id)
     session.add(chat)
     await session.commit()
     return chat.id
@@ -66,12 +77,21 @@ async def delete_session(session: AsyncSession, session_id: str) -> bool:
     return existed
 
 
-async def session_exists(session: AsyncSession, session_id: str) -> bool:
-    return (
-        await session.scalar(
-            select(ChatSession.id).where(ChatSession.id == session_id)
-        )
-    ) is not None
+async def session_exists(
+    session: AsyncSession,
+    session_id: str,
+    user_id: str | None = None,
+    agent_id: str | None = None,
+) -> bool:
+    """Whether the session exists — and, when owner/agent are given, that it
+    belongs to that user and that agent. Callers pass both so a session id
+    guessed from another account is indistinguishable from a missing one."""
+    stmt = select(ChatSession.id).where(ChatSession.id == session_id)
+    if user_id is not None:
+        stmt = stmt.where(ChatSession.user_id == user_id)
+    if agent_id is not None:
+        stmt = stmt.where(ChatSession.agent_id == agent_id)
+    return (await session.scalar(stmt)) is not None
 
 
 async def load_history(session: AsyncSession, session_id: str) -> list[dict]:

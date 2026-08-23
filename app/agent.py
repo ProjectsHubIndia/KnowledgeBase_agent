@@ -3,15 +3,17 @@ import json
 from app.config import settings
 from app.llm import chat_completion
 from app.schemas import AskResponse, ChartSpec
-from app.store import (
-    aggregate,
-    list_documents,
-    list_invoices,
-    read_document,
-    read_invoice,
-)
+from app.store import AgentStore
 
-SYSTEM_PROMPT = (
+# The prompt is deliberately in two halves.
+#
+# DEFAULT_PERSONA is what an admin edits per agent (stored in the DB) — who the
+# assistant is and what domain it covers. TOOL_CONTRACT is NOT editable: it is
+# the rule set that keeps every number in an answer computed by code rather than
+# guessed by the model. It is appended to whatever persona the admin wrote, so a
+# careless prompt edit can never break that guarantee.
+
+DEFAULT_PERSONA = (
     "You are a finance assistant. You answer ONLY from the user's stored data — "
     "their invoices AND any uploaded finance documents (bank statements, P&L, "
     "reports, etc.) — accessed through your tools. Never use outside knowledge "
@@ -21,8 +23,10 @@ SYSTEM_PROMPT = (
     "totals, charts, and invoice details). Finance documents are free-form text — "
     "for questions about them, use list_documents to find the right one and "
     "read_document to read it, then answer from its content and name the document. "
-    "If a question could relate to either, check both.\n"
-    "\n"
+    "If a question could relate to either, check both."
+)
+
+TOOL_CONTRACT = (
     "Tools:\n"
     "- `aggregate_invoices(metric, group_by, where)`: the ONLY correct way to "
     "get totals, counts, and breakdowns — it computes exact numbers for you. "
@@ -69,6 +73,12 @@ SYSTEM_PROMPT = (
     "so the user gets a clean tabular view. A chart can accompany the table when "
     "useful."
 )
+
+
+def build_system_prompt(persona: str | None) -> str:
+    """The admin's persona plus the non-negotiable tool contract."""
+    return f"{(persona or DEFAULT_PERSONA).strip()}\n\n{TOOL_CONTRACT}"
+
 
 TOOLS = [
     {
@@ -216,13 +226,14 @@ _MAX_ROUNDS = 6
 async def _run_tool(
     name: str,
     args: dict,
+    store: AgentStore,
     chart_box: list[ChartSpec],
     sources: set[str],
     aggregated: set[str],
     doc_sources: set[str],
 ) -> str:
     if name == "aggregate_invoices":
-        result = aggregate(
+        result = store.aggregate(
             args.get("metric", "total_amount"),
             args.get("group_by"),
             args.get("where"),
@@ -232,22 +243,22 @@ async def _run_tool(
         aggregated.update(result.get("names", []))
         return json.dumps(result)
     if name == "list_invoices":
-        invoices = list_invoices()
+        invoices = store.list_invoices()
         if len(invoices) <= 3:
             sources.update(inv["name"] for inv in invoices if "name" in inv)
         return json.dumps(invoices)
     if name == "read_invoice":
         inv = args.get("name", "")
-        content = read_invoice(inv)
+        content = store.read_invoice(inv)
         if content is None:
             return "Invoice not found."
         sources.add(inv)  # record the invoice the agent actually used
         return content
     if name == "list_documents":
-        return json.dumps(list_documents())
+        return json.dumps(store.list_documents())
     if name == "read_document":
         doc = args.get("name", "")
-        content = read_document(doc)
+        content = store.read_document(doc)
         if content is None:
             return "Document not found."
         doc_sources.add(doc)
@@ -269,9 +280,14 @@ async def _run_tool(
 
 async def answer_question(
     question: str,
+    store: AgentStore,
+    persona: str | None = None,
     history: list[dict] | None = None,
 ) -> AskResponse:
-    messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    """Run one question against ONE agent: its own data (`store`) and its own
+    admin-configured persona. The toolset is the same for every agent."""
+    system_prompt = build_system_prompt(persona)
+    messages: list[dict] = [{"role": "system", "content": system_prompt}]
     if history:
         messages.extend(history)
     messages.append({"role": "user", "content": question})
@@ -303,7 +319,13 @@ async def answer_question(
         for call in msg.tool_calls:
             args = json.loads(call.function.arguments or "{}")
             result = await _run_tool(
-                call.function.name, args, chart_box, sources, aggregated, doc_sources
+                call.function.name,
+                args,
+                store,
+                chart_box,
+                sources,
+                aggregated,
+                doc_sources,
             )
             messages.append(
                 {"role": "tool", "tool_call_id": call.id, "content": result}

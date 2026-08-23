@@ -7,22 +7,66 @@ const PREVIEW_WIDTH_KEY = "invoice-agent.previewWidth";
 let sessionId = localStorage.getItem(SESSION_KEY) || null;
 let currentPreview = null; // name of the invoice currently shown in the dock
 
-/* ---------- auth (single shared login, see /health-gated middleware) ---------- */
-const AUTH_KEY = "invoice-agent.auth"; // sessionStorage: base64(user:pass)
+/* ---------- auth (per-user login, JWT) ---------- */
+const AUTH_KEY = "invoice-agent.token"; // sessionStorage: the JWT
 const AUTH_USER_KEY = "invoice-agent.authUser";
+const AGENT_KEY = "invoice-agent.agentId";
+
+let currentUser = null;
+let agents = [];
+let agentId = localStorage.getItem(AGENT_KEY) || null;
 
 const rawFetch = window.fetch.bind(window);
 window.fetch = (input, opts = {}) => {
   const token = sessionStorage.getItem(AUTH_KEY);
   if (!token) return rawFetch(input, opts);
   const headers = new Headers(opts.headers || {});
-  headers.set("Authorization", `Basic ${token}`);
-  return rawFetch(input, { ...opts, headers });
+  headers.set("Authorization", `Bearer ${token}`);
+  return rawFetch(input, { ...opts, headers }).then((r) => {
+    if (r.status === 401) {
+      clearToken();
+      showLogin();
+    }
+    return r;
+  });
 };
 
-async function checkAuth(token) {
-  const r = await rawFetch("/health", { headers: { Authorization: `Basic ${token}` } });
-  return r.ok;
+/* Every data/chat route is scoped to the selected agent. */
+function api(path) {
+  return `/agents/${encodeURIComponent(agentId)}${path}`;
+}
+
+function storeToken(token) {
+  sessionStorage.setItem(AUTH_KEY, token);
+  // Also store the token in a cookie so browser-native requests (iframe/img
+  // src, download links like /original) are authenticated — those can't carry
+  // the Authorization header the fetch wrapper adds.
+  document.cookie = `fa_auth=${token}; path=/; max-age=86400; SameSite=Strict`;
+}
+
+function clearToken() {
+  sessionStorage.removeItem(AUTH_KEY);
+  sessionStorage.removeItem(AUTH_USER_KEY);
+  document.cookie = "fa_auth=; path=/; max-age=0; SameSite=Strict";
+}
+
+/* Confirm the stored token is still valid and load who the user is plus the
+   agents they are allowed to use. */
+async function loadMe() {
+  const r = await fetch("/auth/me");
+  if (!r.ok) return false;
+  const data = await r.json();
+  applyIdentity(data.user, data.agents);
+  return true;
+}
+
+function applyIdentity(user, list) {
+  currentUser = user;
+  agents = list || [];
+  sessionStorage.setItem(AUTH_USER_KEY, user.username);
+  // Keep the previously selected agent if it is still granted.
+  if (!agents.some((a) => a.id === agentId)) agentId = agents[0] ? agents[0].id : null;
+  if (agentId) localStorage.setItem(AGENT_KEY, agentId);
 }
 
 function showApp() {
@@ -31,6 +75,9 @@ function showApp() {
   const username = sessionStorage.getItem(AUTH_USER_KEY) || "";
   $("#profile-name").textContent = username || "Account";
   $("#profile-avatar").textContent = username.slice(0, 2) || "?";
+  $("#profile-role").textContent = currentUser ? currentUser.role : "";
+  $("#admin-link").classList.toggle("hidden", !currentUser || currentUser.role !== "admin");
+  renderAgentPicker();
 }
 
 function showLogin() {
@@ -39,33 +86,73 @@ function showLogin() {
   $("#profile-menu").classList.add("hidden");
 }
 
+/* ---------- agent switcher ---------- */
+function renderAgentPicker() {
+  const picker = $("#agent-picker");
+  const empty = $("#agent-empty");
+  picker.innerHTML = "";
+  if (!agents.length) {
+    picker.classList.add("hidden");
+    empty.classList.remove("hidden");
+    return;
+  }
+  picker.classList.remove("hidden");
+  empty.classList.add("hidden");
+  agents.forEach((a) => {
+    const opt = el("option");
+    opt.value = a.id;
+    opt.textContent = a.name;
+    if (a.id === agentId) opt.selected = true;
+    picker.appendChild(opt);
+  });
+  const active = agents.find((a) => a.id === agentId);
+  picker.title = (active && active.description) || "";
+}
+
+/* Switching agent swaps the whole workspace: its data, its conversations. */
+async function switchAgent(id) {
+  if (!id || id === agentId) return;
+  agentId = id;
+  localStorage.setItem(AGENT_KEY, id);
+  sessionId = null;
+  localStorage.removeItem(SESSION_KEY);
+  resetThread();
+  renderAgentPicker();
+  await init();
+}
+
+$("#agent-picker").addEventListener("change", (e) => switchAgent(e.target.value));
+
 $("#login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const username = $("#login-username").value;
-  const token = btoa(`${username}:${$("#login-password").value}`);
   const submit = $("#login-submit");
   submit.disabled = true;
   $("#login-error").classList.add("hidden");
-  const ok = await checkAuth(token);
-  submit.disabled = false;
-  if (!ok) {
+  try {
+    const r = await rawFetch("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: $("#login-username").value,
+        password: $("#login-password").value,
+      }),
+    });
+    if (!r.ok) throw new Error("bad credentials");
+    const data = await r.json();
+    storeToken(data.access_token);
+    applyIdentity(data.user, data.agents);
+    showApp();
+    init();
+    setInterval(ping, 15000);
+  } catch {
     $("#login-error").classList.remove("hidden");
-    return;
+  } finally {
+    submit.disabled = false;
   }
-  sessionStorage.setItem(AUTH_KEY, token);
-  sessionStorage.setItem(AUTH_USER_KEY, username);
-  // Also store the token in a cookie so browser-native requests (iframe/img
-  // src, download links like /original) are authenticated — those can't carry
-  // the Authorization header the fetch wrapper adds.
-  document.cookie = `fa_auth=${token}; path=/; max-age=86400; SameSite=Strict`;
-  showApp();
-  init();
 });
 
 $("#logout-btn").addEventListener("click", () => {
-  sessionStorage.removeItem(AUTH_KEY);
-  sessionStorage.removeItem(AUTH_USER_KEY);
-  document.cookie = "fa_auth=; path=/; max-age=0; SameSite=Strict";
+  clearToken();
   location.reload();
 });
 
@@ -220,13 +307,13 @@ function extOf(name) {
 }
 
 function invoiceUrl(name) {
-  return `/invoices/${encodeURIComponent(name)}`;
+  return api(`/invoices/${encodeURIComponent(name)}`);
 }
 function originalUrl(name) {
   return `${invoiceUrl(name)}/original`;
 }
 function documentUrl(name) {
-  return `/documents/${encodeURIComponent(name)}`;
+  return api(`/documents/${encodeURIComponent(name)}`);
 }
 // Detail / original URLs that work for both invoices and finance documents.
 function detailUrl(name, type) {
@@ -286,7 +373,7 @@ async function loadSessions() {
   const list = $("#session-list");
   let sessions = [];
   try {
-    const r = await fetch("/sessions");
+    const r = await fetch(api("/sessions"));
     if (r.ok) sessions = await r.json();
   } catch {
     return;
@@ -335,7 +422,7 @@ async function switchSession(id) {
 
 async function loadMessages(id) {
   try {
-    const r = await fetch(`/sessions/${id}/messages`);
+    const r = await fetch(api(`/sessions/${id}/messages`));
     thread.innerHTML = "";
     if (!r.ok) return;
     (await r.json()).forEach((m) =>
@@ -350,7 +437,7 @@ async function deleteSession(id) {
   if (!(await confirmDialog("Delete this conversation?",
     "This removes the conversation and its messages."))) return;
   try {
-    const r = await fetch(`/sessions/${id}`, { method: "DELETE" });
+    const r = await fetch(api(`/sessions/${id}`), { method: "DELETE" });
     if (!r.ok && r.status !== 404) throw new Error();
   } catch {
     return;
@@ -370,7 +457,7 @@ async function loadInvoices() {
   const list = $("#inv-list");
   let invs = [];
   try {
-    const r = await fetch("/invoices");
+    const r = await fetch(api("/invoices"));
     if (r.ok) invs = await r.json();
   } catch {
     return;
@@ -421,7 +508,7 @@ async function loadDocuments() {
   if (!list) return;
   let docs = [];
   try {
-    const r = await fetch("/documents");
+    const r = await fetch(api("/documents"));
     if (r.ok) docs = await r.json();
   } catch {
     return;
@@ -861,7 +948,7 @@ async function uploadOne(file, onDuplicate) {
   const fd = new FormData();
   fd.append("file", file);
   if (onDuplicate) fd.append("on_duplicate", onDuplicate);
-  const r = await fetch("/ingest/file", { method: "POST", body: fd });
+  const r = await fetch(api("/ingest/file"), { method: "POST", body: fd });
   return { status: r.status, data: await safeJson(r) };
 }
 
@@ -894,7 +981,7 @@ async function uploadBulk(files) {
   const fd = new FormData();
   files.forEach((f) => fd.append("files", f));
   logIngest(`⟳ extracting ${files.length} invoices in parallel…`);
-  const r = await fetch("/ingest/files", { method: "POST", body: fd });
+  const r = await fetch(api("/ingest/files"), { method: "POST", body: fd });
   const data = await safeJson(r);
   if (!r.ok) {
     logIngest(`✕ bulk upload failed: ${data.detail || r.status}`, true);
@@ -1204,7 +1291,7 @@ async function sendQuestion(question) {
   btn.disabled = true;
   const typing = addTyping();
   try {
-    const r = await fetch("/ask", {
+    const r = await fetch(api("/ask"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question, session_id: sessionId }),
@@ -1400,7 +1487,7 @@ async function restoreSession() {
     return;
   }
   try {
-    const r = await fetch(`/sessions/${sessionId}/messages`);
+    const r = await fetch(api(`/sessions/${sessionId}/messages`));
     if (!r.ok) {
       localStorage.removeItem(SESSION_KEY);
       sessionId = null;
@@ -1496,27 +1583,27 @@ function downloadCSV(csv, filename) {
 /* ---------- init ---------- */
 async function init() {
   setSessionLabel();
+  ping();
+  if (!agentId) return; // user has no agent granted — nothing to load
   await loadCsvQuestions();
   renderSaved();
   await restoreSession();
   loadSessions();
   loadInvoices();
   loadDocuments();
-  ping();
-  setInterval(ping, 15000);
 }
 
 async function boot() {
   const token = sessionStorage.getItem(AUTH_KEY);
-  if (token && (await checkAuth(token))) {
+  if (token && (await loadMe())) {
     // Refresh the cookie so browser-native requests (previews/downloads) stay
     // authenticated after a page reload, not just right after login.
-    document.cookie = `fa_auth=${token}; path=/; max-age=86400; SameSite=Strict`;
+    storeToken(token);
     showApp();
     init();
+    setInterval(ping, 15000);
   } else {
-    sessionStorage.removeItem(AUTH_KEY);
-    document.cookie = "fa_auth=; path=/; max-age=0; SameSite=Strict";
+    clearToken();
     showLogin();
   }
 }

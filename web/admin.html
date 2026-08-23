@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Finance · Admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="icon" href="/static/image/logo.png" type="image/png">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap"
+    rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+
+<body>
+  <div id="admin-shell" class="hidden">
+    <header class="masthead">
+      <div class="masthead-inner">
+        <div class="wordmark">
+          <img src="/static/image/logo.png" alt="" class="wordmark-logo" />
+          <span class="wordmark-sub">Admin console</span>
+        </div>
+        <div class="masthead-actions">
+          <span class="admin-who" id="admin-who"></span>
+          <a class="btn btn--ghost" href="/">← Back to chat</a>
+        </div>
+      </div>
+    </header>
+
+    <main class="admin-layout">
+      <nav class="admin-tabs">
+        <button class="admin-tab active" data-tab="agents" type="button">Agents</button>
+        <button class="admin-tab" data-tab="users" type="button">Users</button>
+      </nav>
+
+      <!-- ---------------- Agents ---------------- -->
+      <section class="admin-panel" id="tab-agents">
+        <div class="admin-col">
+          <div class="admin-col-head">
+            <h2 class="panel-title">Agents</h2>
+            <button class="btn btn--ghost" id="new-agent" type="button">+ New agent</button>
+          </div>
+          <p class="panel-desc">Each agent has its own system prompt and its own document store.
+            All agents share the same built-in toolset.</p>
+          <div class="admin-list" id="agent-list"></div>
+        </div>
+
+        <div class="admin-col admin-col--form">
+          <form class="admin-form hidden" id="agent-form">
+            <h3 class="admin-form-title" id="agent-form-title">New agent</h3>
+
+            <label class="admin-field">
+              <span class="admin-field-label">Name</span>
+              <input class="login-input" id="agent-name" required placeholder="e.g. Payroll Desk" />
+            </label>
+
+            <label class="admin-field">
+              <span class="admin-field-label">Description</span>
+              <input class="login-input" id="agent-desc" placeholder="Shown to users in the agent picker" />
+            </label>
+
+            <label class="admin-field">
+              <span class="admin-field-label">System prompt</span>
+              <textarea class="login-input admin-textarea" id="agent-prompt" rows="14"
+                placeholder="Who this assistant is and what it covers…"></textarea>
+            </label>
+            <p class="admin-note">
+              The tool rules that keep every number computed in code — never guessed by the model —
+              are appended to this prompt automatically and cannot be edited here.
+            </p>
+
+            <label class="admin-check">
+              <input type="checkbox" id="agent-active" checked />
+              <span>Active (visible to users)</span>
+            </label>
+
+            <div class="admin-form-actions">
+              <button class="btn btn--solid" type="submit" id="agent-save">Save</button>
+              <button class="btn btn--ghost" type="button" id="agent-cancel">Cancel</button>
+              <button class="btn btn--ghost admin-danger hidden" type="button" id="agent-delete">Delete</button>
+            </div>
+            <p class="admin-error hidden" id="agent-error"></p>
+          </form>
+        </div>
+      </section>
+
+      <!-- ---------------- Users ---------------- -->
+      <section class="admin-panel hidden" id="tab-users">
+        <div class="admin-col">
+          <div class="admin-col-head">
+            <h2 class="panel-title">Users</h2>
+            <button class="btn btn--ghost" id="new-user" type="button">+ New user</button>
+          </div>
+          <p class="panel-desc">Create a login and choose exactly which agents it can use.</p>
+          <div class="admin-list" id="user-list"></div>
+        </div>
+
+        <div class="admin-col admin-col--form">
+          <form class="admin-form hidden" id="user-form">
+            <h3 class="admin-form-title" id="user-form-title">New user</h3>
+
+            <label class="admin-field">
+              <span class="admin-field-label">Username</span>
+              <input class="login-input" id="user-name" autocomplete="off" placeholder="e.g. alice" />
+            </label>
+
+            <label class="admin-field">
+              <span class="admin-field-label" id="user-pw-label">Password</span>
+              <input class="login-input" id="user-pw" type="password" autocomplete="new-password"
+                placeholder="Choose a password" />
+            </label>
+
+            <label class="admin-field">
+              <span class="admin-field-label">Role</span>
+              <select class="login-input agent-picker" id="user-role">
+                <option value="user">User — chats with granted agents</option>
+                <option value="admin">Admin — full access to this console</option>
+              </select>
+            </label>
+
+            <div class="admin-field">
+              <span class="admin-field-label">Agent access</span>
+              <div class="admin-grants" id="user-grants"></div>
+            </div>
+
+            <label class="admin-check">
+              <input type="checkbox" id="user-active" checked />
+              <span>Active (can sign in)</span>
+            </label>
+
+            <div class="admin-form-actions">
+              <button class="btn btn--solid" type="submit" id="user-save">Save</button>
+              <button class="btn btn--ghost" type="button" id="user-cancel">Cancel</button>
+              <button class="btn btn--ghost admin-danger hidden" type="button" id="user-delete">Delete</button>
+            </div>
+            <p class="admin-error hidden" id="user-error"></p>
+          </form>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Login gate -->
+  <div id="login-overlay" class="overlay">
+    <form class="modal" id="login-form" role="dialog" aria-modal="true">
+      <p class="modal-text">Admin sign in</p>
+      <p class="modal-sub">This console is restricted to administrator accounts.</p>
+      <div class="login-fields">
+        <input id="login-username" class="login-input" type="text" name="username" placeholder="Username"
+          autocomplete="username" required />
+        <input id="login-password" class="login-input" type="password" name="password" placeholder="Password"
+          autocomplete="current-password" required />
+      </div>
+      <p class="modal-sub login-error hidden" id="login-error">Incorrect username or password.</p>
+      <div class="modal-actions">
+        <button class="btn btn--solid" type="submit" id="login-submit">Sign in</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Confirmation modal -->
+  <div id="confirm-overlay" class="overlay hidden">
+    <div class="modal" role="dialog" aria-modal="true">
+      <p class="modal-text" id="confirm-text">Delete?</p>
+      <p class="modal-sub" id="confirm-sub">This cannot be undone.</p>
+      <div class="modal-actions">
+        <button class="btn btn--ghost" id="confirm-cancel">Cancel</button>
+        <button class="btn btn--solid" id="confirm-ok">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/admin.js"></script>
+</body>
+
+</html>

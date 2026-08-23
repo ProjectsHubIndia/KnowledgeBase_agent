@@ -1,4 +1,6 @@
-from pydantic import Field
+import secrets
+
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,9 +27,26 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://postgres:postgres@localhost:9432/agentvector"
     )
 
-    # Shared login for the web app + API (single account, no user table).
+    # Bootstrap admin — seeded into the users table on first startup only.
+    # Existing deployments keep working with the .env they already have.
     auth_username: str = Field(validation_alias="AUTH_USERNAME")
     auth_password: str = Field(validation_alias="AUTH_PASSWORD")
+
+    # JWT signing. Set JWT_SECRET in .env to keep tokens valid across restarts;
+    # if unset we generate a per-process secret (everyone is logged out on
+    # restart, but the app still boots — important for existing installs).
+    jwt_secret: str = Field(
+        default_factory=lambda: secrets.token_urlsafe(48),
+        validation_alias="JWT_SECRET",
+    )
+    jwt_ttl_hours: int = 12
+
+    @field_validator("jwt_secret")
+    @classmethod
+    def _secret_must_not_be_blank(cls, value: str) -> str:
+        """An empty JWT_SECRET= line in .env would otherwise sign tokens with an
+        empty key — fall back to a random per-process secret instead."""
+        return value.strip() or secrets.token_urlsafe(48)
 
     # Conversation sessions
     history_turns: int = 6  # how many prior user/assistant turns to replay
