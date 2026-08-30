@@ -5,6 +5,16 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Finance · Admin</title>
+  <script>
+    // Applied before first paint so the page never flashes the wrong theme.
+    // Kept in sync with the theme module in core.js (same storage key).
+    (function () {
+      try {
+        var t = localStorage.getItem("invoice-agent.theme");
+        if (t === "dark" || t === "light") document.documentElement.setAttribute("data-theme", t);
+      } catch (e) { /* storage unavailable — fall back to the OS preference */ }
+    })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="icon" href="/static/image/logo.png" type="image/png">
@@ -22,21 +32,67 @@
           <img src="/static/image/logo.png" alt="" class="wordmark-logo" />
           <span class="wordmark-sub">Admin console</span>
         </div>
-        <div class="masthead-actions">
-          <span class="admin-who" id="admin-who"></span>
+        <div class="masthead-meta">
+          <button id="theme-toggle" class="icon-btn" type="button" title="Theme: system" aria-label="Toggle theme">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <circle cx="8" cy="8" r="3.4" stroke="currentColor" stroke-width="1.3" />
+              <path d="M8 1.3v1.6M8 13.1v1.6M2.6 2.6l1.1 1.1M12.3 12.3l1.1 1.1M1.3 8h1.6M13.1 8h1.6M2.6 13.4l1.1-1.1M12.3 3.7l1.1-1.1"
+                stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+            </svg>
+          </button>
           <a class="btn btn--ghost" href="/">← Back to chat</a>
+          <div class="admin-account" id="admin-account">
+            <button class="admin-who" id="admin-who-btn" type="button">
+              <span id="admin-who">—</span>
+              <span class="profile-chevron" aria-hidden="true">⋮</span>
+            </button>
+            <div class="profile-menu admin-account-menu hidden" id="admin-account-menu">
+              <button id="admin-logout-btn" class="profile-menu-item" type="button">
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path d="M6.5 2H3a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3.5" stroke="currentColor" stroke-width="1.3"
+                    stroke-linecap="round" stroke-linejoin="round" />
+                  <path d="M10.5 11.5 14 8l-3.5-3.5M14 8H6" stroke="currentColor" stroke-width="1.3"
+                    stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <span>Log out</span>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </header>
 
     <main class="admin-layout">
       <nav class="admin-tabs">
-        <button class="admin-tab active" data-tab="agents" type="button">Agents</button>
+        <button class="admin-tab active" data-tab="overview" type="button">Overview</button>
+        <button class="admin-tab" data-tab="agents" type="button">Agents</button>
         <button class="admin-tab" data-tab="users" type="button">Users</button>
       </nav>
 
+      <!-- ---------------- Overview ---------------- -->
+      <section class="admin-panel admin-panel--overview" id="tab-overview">
+        <div class="stat-tiles">
+          <div class="stat-tile">
+            <span class="stat-tile-value" id="stat-agents">—</span>
+            <span class="stat-tile-label">Agents</span>
+          </div>
+          <div class="stat-tile">
+            <span class="stat-tile-value" id="stat-users">—</span>
+            <span class="stat-tile-label">Users</span>
+          </div>
+          <div class="stat-tile">
+            <span class="stat-tile-value" id="stat-invoices">—</span>
+            <span class="stat-tile-label">Invoices</span>
+          </div>
+          <div class="stat-tile">
+            <span class="stat-tile-value" id="stat-documents">—</span>
+            <span class="stat-tile-label">Documents</span>
+          </div>
+        </div>
+      </section>
+
       <!-- ---------------- Agents ---------------- -->
-      <section class="admin-panel" id="tab-agents">
+      <section class="admin-panel hidden" id="tab-agents">
         <div class="admin-col">
           <div class="admin-col-head">
             <h2 class="panel-title">Agents</h2>
@@ -58,18 +114,29 @@
 
             <label class="admin-field">
               <span class="admin-field-label">Description</span>
-              <input class="login-input" id="agent-desc" placeholder="Shown to users in the agent picker" />
+              <input class="login-input" id="agent-desc" placeholder="Shown to users in the agent switcher" />
             </label>
 
             <label class="admin-field">
-              <span class="admin-field-label">System prompt</span>
-              <textarea class="login-input admin-textarea" id="agent-prompt" rows="14"
+              <span class="admin-field-label admin-field-label--row">
+                <span>System prompt</span>
+                <span class="admin-char-count" id="agent-prompt-count">0 chars</span>
+              </span>
+              <textarea class="login-input admin-textarea" id="agent-prompt" rows="12"
                 placeholder="Who this assistant is and what it covers…"></textarea>
             </label>
-            <p class="admin-note">
-              The tool rules that keep every number computed in code — never guessed by the model —
-              are appended to this prompt automatically and cannot be edited here.
-            </p>
+            <button class="admin-inline-btn" type="button" id="agent-reset-prompt">Reset to default persona</button>
+
+            <details class="admin-contract">
+              <summary>Always appended · not editable</summary>
+              <pre class="admin-contract-body" id="agent-contract-body"></pre>
+            </details>
+
+            <label class="admin-field">
+              <span class="admin-field-label">Onboarding questions</span>
+              <textarea class="login-input admin-textarea admin-textarea--short" id="agent-suggestions" rows="4"
+                placeholder="One question per line — shown as chips on an empty conversation. Leave blank to use the built-in finance defaults."></textarea>
+            </label>
 
             <label class="admin-check">
               <input type="checkbox" id="agent-active" checked />
@@ -112,13 +179,17 @@
                 placeholder="Choose a password" />
             </label>
 
-            <label class="admin-field">
+            <div class="admin-field">
               <span class="admin-field-label">Role</span>
-              <select class="login-input agent-picker" id="user-role">
-                <option value="user">User — chats with granted agents</option>
-                <option value="admin">Admin — full access to this console</option>
-              </select>
-            </label>
+              <div class="segmented" id="user-role" data-value="user">
+                <button type="button" class="segmented-btn active" data-role="user">
+                  User <span class="segmented-hint">chats with granted agents</span>
+                </button>
+                <button type="button" class="segmented-btn" data-role="admin">
+                  Admin <span class="segmented-hint">full console access</span>
+                </button>
+              </div>
+            </div>
 
             <div class="admin-field">
               <span class="admin-field-label">Agent access</span>
@@ -142,8 +213,14 @@
     </main>
   </div>
 
+  <!-- Boot splash: shown only while a stored token is being verified, so a
+       returning signed-in admin never sees the login modal flash. -->
+  <div id="boot-splash" class="hidden">
+    <span class="dot online" aria-hidden="true"></span>
+  </div>
+
   <!-- Login gate -->
-  <div id="login-overlay" class="overlay">
+  <div id="login-overlay" class="overlay hidden">
     <form class="modal" id="login-form" role="dialog" aria-modal="true">
       <p class="modal-text">Admin sign in</p>
       <p class="modal-sub">This console is restricted to administrator accounts.</p>
@@ -160,11 +237,16 @@
     </form>
   </div>
 
-  <!-- Confirmation modal -->
+  <!-- Confirmation modal (the optional checkbox row is used by the agent
+       delete flow to offer purging its files from disk). -->
   <div id="confirm-overlay" class="overlay hidden">
     <div class="modal" role="dialog" aria-modal="true">
       <p class="modal-text" id="confirm-text">Delete?</p>
       <p class="modal-sub" id="confirm-sub">This cannot be undone.</p>
+      <label class="admin-check confirm-checkbox-row hidden" id="confirm-checkbox-row">
+        <input type="checkbox" id="confirm-checkbox" />
+        <span id="confirm-checkbox-label"></span>
+      </label>
       <div class="modal-actions">
         <button class="btn btn--ghost" id="confirm-cancel">Cancel</button>
         <button class="btn btn--solid" id="confirm-ok">Delete</button>
@@ -172,6 +254,31 @@
     </div>
   </div>
 
+  <!-- Command palette (Ctrl/Cmd+K) -->
+  <div id="command-palette" class="overlay hidden">
+    <div class="palette-modal" role="dialog" aria-modal="true" aria-label="Command palette">
+      <input id="palette-input" class="palette-input" type="text" placeholder="Type a command or search…"
+        autocomplete="off" />
+      <div class="palette-list" id="palette-list" role="listbox"></div>
+      <p class="palette-empty hidden" id="palette-empty">No matches.</p>
+    </div>
+  </div>
+
+  <!-- Keyboard shortcuts sheet (Ctrl/Cmd+/) -->
+  <div id="shortcuts-overlay" class="overlay hidden">
+    <div class="modal" role="dialog" aria-modal="true">
+      <p class="modal-text">Keyboard shortcuts</p>
+      <div class="shortcuts-list" id="shortcuts-list"></div>
+      <div class="modal-actions">
+        <button class="btn btn--solid" id="shortcuts-close" type="button">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cross-cutting notifications (session expired, save failed, etc.) -->
+  <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
+
+  <script src="/static/js/core.js"></script>
   <script src="/static/js/admin.js"></script>
 </body>
 

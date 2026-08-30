@@ -63,6 +63,9 @@ class Agent(Base):
     # is always appended at request time and cannot be edited away.
     system_prompt: Mapped[str] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Newline-separated onboarding questions shown as chips on an empty
+    # thread. Null falls back to a built-in finance default list.
+    suggestions: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -126,6 +129,7 @@ async def init_db() -> None:
             "ALTER TABLE messages ADD COLUMN IF NOT EXISTS meta TEXT",
             "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_id VARCHAR(32)",
             "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS agent_id VARCHAR(32)",
+            "ALTER TABLE agents ADD COLUMN IF NOT EXISTS suggestions TEXT",
         ):
             await conn.execute(text(stmt))
 

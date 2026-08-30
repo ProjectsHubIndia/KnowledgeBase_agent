@@ -26,6 +26,14 @@ DEFAULT_PERSONA = (
     "If a question could relate to either, check both."
 )
 
+# Onboarding chips shown on an empty thread when an agent has no
+# admin-configured suggestions of its own (Agent.suggestions is null).
+DEFAULT_SUGGESTIONS = [
+    "Give total tax amount from all invoices",
+    "State wise sales pie chart",
+    "Company growth line chart by month by sales",
+]
+
 TOOL_CONTRACT = (
     "Tools:\n"
     "- `aggregate_invoices(metric, group_by, where)`: the ONLY correct way to "

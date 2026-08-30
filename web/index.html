@@ -5,6 +5,16 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Finance · Agent</title>
+  <script>
+    // Applied before first paint so the page never flashes the wrong theme.
+    // Kept in sync with the theme module in core.js (same storage key).
+    (function () {
+      try {
+        var t = localStorage.getItem("invoice-agent.theme");
+        if (t === "dark" || t === "light") document.documentElement.setAttribute("data-theme", t);
+      } catch (e) { /* storage unavailable — fall back to the OS preference */ }
+    })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="icon" href="/static/image/logo.png" type="image/png">
@@ -24,9 +34,32 @@
         <span class="wordmark-sep">·</span>
         <span class="wordmark-sub">Agent</span>
       </div>
+      <div class="masthead-center">
+        <button id="agent-chip" class="agent-chip" type="button" aria-haspopup="listbox" aria-expanded="false">
+          <span class="agent-chip-mark" id="agent-chip-mark">—</span>
+          <span class="agent-chip-name" id="agent-chip-name">No agent</span>
+          <svg class="agent-chip-caret" width="10" height="6" viewBox="0 0 10 6" fill="none" aria-hidden="true">
+            <path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round" />
+          </svg>
+        </button>
+        <div class="agent-switcher hidden" id="agent-switcher" role="listbox" aria-label="Choose agent">
+          <div class="agent-switcher-list" id="agent-switcher-list"></div>
+          <p class="agent-switcher-empty hidden" id="agent-switcher-empty">
+            No agents have been assigned to you yet.
+          </p>
+          <a id="agent-switcher-manage" class="agent-switcher-manage hidden" href="/admin">+ Manage agents</a>
+        </div>
+      </div>
       <div class="masthead-meta">
+        <button id="theme-toggle" class="icon-btn" type="button" title="Theme: system" aria-label="Toggle theme">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <circle cx="8" cy="8" r="3.4" stroke="currentColor" stroke-width="1.3" />
+            <path d="M8 1.3v1.6M8 13.1v1.6M2.6 2.6l1.1 1.1M12.3 12.3l1.1 1.1M1.3 8h1.6M13.1 8h1.6M2.6 13.4l1.1-1.1M12.3 3.7l1.1-1.1"
+              stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+          </svg>
+        </button>
         <span id="status-dot" class="dot" title="connecting"></span>
-        <span class="masthead-tagline">Finance Analytics Engine</span>
+        <span class="masthead-tagline" id="status-text">CONNECTING</span>
       </div>
     </div>
   </header>
@@ -46,11 +79,6 @@
           </button>
         </div>
       </div>
-      <div class="agent-bar">
-        <label class="agent-label" for="agent-picker">Agent</label>
-        <select id="agent-picker" class="agent-picker"></select>
-        <p id="agent-empty" class="agent-empty hidden">No agents have been assigned to you yet.</p>
-      </div>
       <div id="history-body" class="history-body">
         <div id="session-list" class="session-list">
           <p class="session-empty">No conversations yet.</p>
@@ -60,7 +88,10 @@
         <button class="profile-card" id="profile-card" type="button">
           <span class="profile-avatar" id="profile-avatar">?</span>
           <span class="profile-info">
-            <span class="profile-name" id="profile-name">—</span>
+            <span class="profile-name-row">
+              <span class="profile-name" id="profile-name">—</span>
+              <span class="profile-badge hidden" id="profile-badge">Admin</span>
+            </span>
             <span class="profile-sub" id="profile-role">Signed in</span>
           </span>
           <span class="profile-chevron" aria-hidden="true">⋮</span>
@@ -105,6 +136,10 @@
         <button class="btn btn--solid" type="submit">Extract &amp; Store</button>
       </form>
 
+      <div class="kb-docs-head ingest-log-head hidden" id="ingest-log-head">
+        <span class="field-label">Activity</span>
+        <button class="admin-inline-btn" type="button" id="ingest-clear">Clear</button>
+      </div>
       <div id="ingest-log" class="log" aria-live="polite"></div>
 
       <div class="kb-docs">
@@ -131,12 +166,19 @@
     <!-- Conversation + preview split -->
     <section class="panel panel--chat">
       <!-- Chat -->
-      <div class="chat-main">
+      <div class="chat-main" id="chat-main">
         <div class="panel-head chat-head">
           <div>
-            <h2 class="panel-title">Ask</h2>
+            <h2 class="panel-title" id="chat-title">New conversation</h2>
             <p class="panel-desc" id="session-label">No active session</p>
           </div>
+        </div>
+
+        <div id="no-agent-state" class="no-agent-state hidden">
+          <div class="empty-mark">₹</div>
+          <h3 class="no-agent-title">No agent yet</h3>
+          <p class="no-agent-text" id="no-agent-text">Ask your administrator for access to an agent.</p>
+          <a id="no-agent-cta" class="btn btn--solid hidden" href="/admin">Create an agent →</a>
         </div>
 
         <div id="thread" class="thread">
@@ -179,8 +221,14 @@
   </main>
   </div>
 
+  <!-- Boot splash: shown only while a stored token is being verified, so a
+       returning signed-in user never sees the login modal flash. -->
+  <div id="boot-splash" class="hidden">
+    <span class="dot online" aria-hidden="true"></span>
+  </div>
+
   <!-- Login gate -->
-  <div id="login-overlay" class="overlay">
+  <div id="login-overlay" class="overlay hidden">
     <form class="modal" id="login-form" role="dialog" aria-modal="true">
       <p class="modal-text">Sign in</p>
       <p class="modal-sub">Enter your credentials to access the Finance Agent.</p>
@@ -202,6 +250,10 @@
     <div class="modal" role="dialog" aria-modal="true">
       <p class="modal-text" id="confirm-text">Delete?</p>
       <p class="modal-sub" id="confirm-sub">This cannot be undone.</p>
+      <label class="admin-check confirm-checkbox-row hidden" id="confirm-checkbox-row">
+        <input type="checkbox" id="confirm-checkbox" />
+        <span id="confirm-checkbox-label"></span>
+      </label>
       <div class="modal-actions">
         <button class="btn btn--ghost" id="confirm-cancel">Cancel</button>
         <button class="btn btn--solid" id="confirm-ok">Delete</button>
@@ -222,6 +274,30 @@
     </div>
   </div>
 
+  <!-- Command palette (Ctrl/Cmd+K) -->
+  <div id="command-palette" class="overlay hidden">
+    <div class="palette-modal" role="dialog" aria-modal="true" aria-label="Command palette">
+      <input id="palette-input" class="palette-input" type="text" placeholder="Type a command or search…"
+        autocomplete="off" />
+      <div class="palette-list" id="palette-list" role="listbox"></div>
+      <p class="palette-empty hidden" id="palette-empty">No matches.</p>
+    </div>
+  </div>
+
+  <!-- Keyboard shortcuts sheet (Ctrl/Cmd+/) -->
+  <div id="shortcuts-overlay" class="overlay hidden">
+    <div class="modal" role="dialog" aria-modal="true">
+      <p class="modal-text">Keyboard shortcuts</p>
+      <div class="shortcuts-list" id="shortcuts-list"></div>
+      <div class="modal-actions">
+        <button class="btn btn--solid" id="shortcuts-close" type="button">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cross-cutting notifications (access revoked, session expired, etc.) -->
+  <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
+
   <!-- Vendored libraries -->
   <script src="/static/js/marked.min.js"></script>
   <script src="/static/js/purify.min.js"></script>
@@ -229,6 +305,7 @@
   <!-- New: spreadsheet + Word viewers (see note below for how to fetch these) -->
   <script src="/static/js/xlsx.full.min.js"></script>
   <script src="/static/js/mammoth.browser.min.js"></script>
+  <script src="/static/js/core.js"></script>
   <script src="/static/js/app.js"></script>
 </body>
 

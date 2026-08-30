@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.admin import router as admin_router
-from app.agent import DEFAULT_PERSONA, answer_question
+from app.agent import DEFAULT_PERSONA, DEFAULT_SUGGESTIONS, answer_question
 from app.auth import CurrentUser, agent_access, bearer_token, current_user
 from app.auth import router as auth_router
 from app.config import settings
@@ -21,6 +21,8 @@ from app.db import Agent, SessionLocal, User, get_session, init_db
 from app.extract import extract_invoice
 from app.parsing import is_supported, parse_to_markdown
 from app.schemas import (
+    AgentStats,
+    AgentSuggestions,
     AskRequest,
     AskResponse,
     IngestResponse,
@@ -149,6 +151,28 @@ agents = APIRouter(prefix="/agents/{agent_id}", tags=["agent"])
 
 def store_for(agent: Agent = Depends(agent_access)) -> AgentStore:
     return AgentStore(agent.slug)
+
+
+@agents.get("/stats", response_model=AgentStats)
+async def agent_stats(store: AgentStore = Depends(store_for)) -> AgentStats:
+    """Invoice/document counts for the switcher. Deliberately its own route,
+    fetched lazily for the selected agent only — computing this for every
+    granted agent up front would mean parsing every file on disk on login."""
+    return AgentStats(
+        invoices=len(store.list_invoices()),
+        documents=len(store.list_documents()),
+    )
+
+
+@agents.get("/suggestions", response_model=AgentSuggestions)
+async def agent_suggestions(agent: Agent = Depends(agent_access)) -> AgentSuggestions:
+    """Onboarding chips for an empty thread — the agent's own list if the
+    admin set one, else the built-in finance defaults."""
+    if agent.suggestions:
+        questions = [q.strip() for q in agent.suggestions.splitlines() if q.strip()]
+        if questions:
+            return AgentSuggestions(questions=questions)
+    return AgentSuggestions(questions=DEFAULT_SUGGESTIONS)
 
 
 @agents.post("/ingest/file", response_model=IngestResponse)

@@ -1,6 +1,9 @@
 "use strict";
 
-const $ = (sel) => document.querySelector(sel);
+/* $, el, escapeHtml, safeJson, confirmDialog, toast, theme, cssVar, and the
+   auth token helpers (storeToken/clearToken/getToken) + fetch wrapper all
+   come from core.js, loaded before this file. */
+
 const SESSION_KEY = "invoice-agent.session";
 const PREVIEW_WIDTH_KEY = "invoice-agent.previewWidth";
 
@@ -8,46 +11,16 @@ let sessionId = localStorage.getItem(SESSION_KEY) || null;
 let currentPreview = null; // name of the invoice currently shown in the dock
 
 /* ---------- auth (per-user login, JWT) ---------- */
-const AUTH_KEY = "invoice-agent.token"; // sessionStorage: the JWT
-const AUTH_USER_KEY = "invoice-agent.authUser";
 const AGENT_KEY = "invoice-agent.agentId";
 
 let currentUser = null;
 let agents = [];
 let agentId = localStorage.getItem(AGENT_KEY) || null;
 
-const rawFetch = window.fetch.bind(window);
-window.fetch = (input, opts = {}) => {
-  const token = sessionStorage.getItem(AUTH_KEY);
-  if (!token) return rawFetch(input, opts);
-  const headers = new Headers(opts.headers || {});
-  headers.set("Authorization", `Bearer ${token}`);
-  return rawFetch(input, { ...opts, headers }).then((r) => {
-    if (r.status === 401) {
-      clearToken();
-      showLogin();
-    }
-    return r;
-  });
-};
-
 /* Every data/chat route is scoped to the selected agent. */
 function api(path) {
+  if (!agentId) throw new Error("No agent selected");
   return `/agents/${encodeURIComponent(agentId)}${path}`;
-}
-
-function storeToken(token) {
-  sessionStorage.setItem(AUTH_KEY, token);
-  // Also store the token in a cookie so browser-native requests (iframe/img
-  // src, download links like /original) are authenticated — those can't carry
-  // the Authorization header the fetch wrapper adds.
-  document.cookie = `fa_auth=${token}; path=/; max-age=86400; SameSite=Strict`;
-}
-
-function clearToken() {
-  sessionStorage.removeItem(AUTH_KEY);
-  sessionStorage.removeItem(AUTH_USER_KEY);
-  document.cookie = "fa_auth=; path=/; max-age=0; SameSite=Strict";
 }
 
 /* Confirm the stored token is still valid and load who the user is plus the
@@ -69,45 +42,245 @@ function applyIdentity(user, list) {
   if (agentId) localStorage.setItem(AGENT_KEY, agentId);
 }
 
+/* Re-fetch identity and react if what this user can access changed under
+   them — an admin revoking a grant or deactivating an agent mid-session.
+   Called immediately on a 403 (unambiguous access denial) and on a timer
+   (to catch an agent disappearing entirely, which surfaces as a 404 that
+   would be indistinguishable from a routine "invoice not found" if handled
+   generically). */
+let syncingIdentity = false;
+async function syncIdentity() {
+  if (syncingIdentity) return;
+  syncingIdentity = true;
+  try {
+    const had = agentId;
+    const hadIds = agents.map((a) => a.id).sort().join(",");
+    const r = await fetch("/auth/me");
+    if (!r.ok) return; // a 401 here already triggers onUnauthorized via the fetch wrapper
+    const data = await r.json();
+    applyIdentity(data.user, data.agents);
+    const nowIds = agents.map((a) => a.id).sort().join(",");
+    if (nowIds === hadIds) return; // nothing actually changed
+    const lostCurrent = had && !agents.some((a) => a.id === had);
+    toast(
+      lostCurrent ? "You no longer have access to that agent." : "Your available agents changed.",
+      { variant: lostCurrent ? "danger" : "info" }
+    );
+    if (lostCurrent) closePreview();
+    renderAgentChip();
+    await init();
+  } catch {
+    /* offline — leave things as they are */
+  } finally {
+    syncingIdentity = false;
+  }
+}
+
 function showApp() {
+  $("#boot-splash").classList.add("hidden");
   $("#login-overlay").classList.add("hidden");
   $("#app-shell").classList.remove("hidden");
   const username = sessionStorage.getItem(AUTH_USER_KEY) || "";
   $("#profile-name").textContent = username || "Account";
   $("#profile-avatar").textContent = username.slice(0, 2) || "?";
-  $("#profile-role").textContent = currentUser ? currentUser.role : "";
   $("#admin-link").classList.toggle("hidden", !currentUser || currentUser.role !== "admin");
-  renderAgentPicker();
+  renderAgentChip();
+}
+
+// The role now shows as a badge next to the name; the sub-line — "Signed
+// in" before, then a bare "USER"/"ADMIN" after multi-agent — does something
+// more useful: how many agents this account can actually reach.
+function renderProfileCard() {
+  const isAdmin = currentUser && currentUser.role === "admin";
+  $("#profile-badge").textContent = "Admin";
+  $("#profile-badge").classList.toggle("hidden", !isAdmin);
+  $("#profile-role").textContent = agents.length
+    ? `${agents.length} agent${agents.length === 1 ? "" : "s"}`
+    : "No agents";
 }
 
 function showLogin() {
+  $("#boot-splash").classList.add("hidden");
   $("#app-shell").classList.add("hidden");
   $("#login-overlay").classList.remove("hidden");
   $("#profile-menu").classList.add("hidden");
 }
 
-/* ---------- agent switcher ---------- */
-function renderAgentPicker() {
-  const picker = $("#agent-picker");
-  const empty = $("#agent-empty");
-  picker.innerHTML = "";
-  if (!agents.length) {
-    picker.classList.add("hidden");
-    empty.classList.remove("hidden");
+setAuthHandlers({ onUnauthorized: showLogin, onAccessChanged: syncIdentity });
+
+/* ---------- agent switcher (masthead chip + dropdown panel) ---------- */
+let agentStatsCache = {}; // agentId -> {invoices, documents} | "loading"
+let switcherFocusIndex = -1;
+
+function agentMonogram(name) {
+  const words = (name || "").trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return "—";
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (words[0][0] + words[1][0]).toUpperCase();
+}
+
+function renderAgentChip() {
+  const chip = $("#agent-chip");
+  const active = agents.find((a) => a.id === agentId);
+  chip.classList.toggle("agent-chip--empty", !active);
+  $("#agent-chip-mark").textContent = active ? agentMonogram(active.name) : "—";
+  $("#agent-chip-name").textContent = active ? active.name : "No agent";
+  chip.title = (active && active.description) || "";
+  renderNoAgentWorkspace();
+  renderProfileCard();
+}
+
+/* R2: a user with zero granted agents gets a real disabled state — not a
+   fully-interactive UI that quietly 404s every request against
+   /agents/null/... */
+function renderNoAgentWorkspace() {
+  const isEmpty = agents.length === 0;
+  $("#app-layout").classList.toggle("layout--no-agent", isEmpty);
+  $("#chat-main").classList.toggle("chat-main--empty", isEmpty);
+  $("#no-agent-state").classList.toggle("hidden", !isEmpty);
+  $("#new-chat").disabled = isEmpty;
+  fileInput.disabled = isEmpty;
+  $("#ask-input").disabled = isEmpty;
+  $("#ask-btn").disabled = isEmpty;
+  $("#save-q").disabled = isEmpty;
+  if (isEmpty) {
+    const isAdmin = currentUser && currentUser.role === "admin";
+    $("#no-agent-text").textContent = isAdmin
+      ? "Create an agent in the admin console to get started."
+      : "Ask your administrator for access to an agent.";
+    $("#no-agent-cta").classList.toggle("hidden", !isAdmin);
+  }
+}
+
+function statsLabel(stats) {
+  if (!stats) return "";
+  if (stats === "loading") return "Loading…";
+  return (
+    `${stats.invoices} invoice${stats.invoices === 1 ? "" : "s"} · ` +
+    `${stats.documents} document${stats.documents === 1 ? "" : "s"}`
+  );
+}
+
+// Fetched lazily, only for the active agent — never for every row, since
+// computing this on the server reads every invoice/document file on disk.
+async function fetchAgentStats(id) {
+  agentStatsCache[id] = "loading";
+  try {
+    const r = await fetch(`/agents/${encodeURIComponent(id)}/stats`);
+    if (!r.ok) {
+      delete agentStatsCache[id];
+      return;
+    }
+    agentStatsCache[id] = await r.json();
+  } catch {
+    delete agentStatsCache[id];
     return;
   }
-  picker.classList.remove("hidden");
-  empty.classList.add("hidden");
-  agents.forEach((a) => {
-    const opt = el("option");
-    opt.value = a.id;
-    opt.textContent = a.name;
-    if (a.id === agentId) opt.selected = true;
-    picker.appendChild(opt);
-  });
-  const active = agents.find((a) => a.id === agentId);
-  picker.title = (active && active.description) || "";
+  const span = document.querySelector(`[data-stats-for="${id}"]`);
+  if (span) span.textContent = statsLabel(agentStatsCache[id]);
 }
+
+function renderAgentSwitcherList() {
+  const list = $("#agent-switcher-list");
+  const empty = $("#agent-switcher-empty");
+  const manage = $("#agent-switcher-manage");
+  list.innerHTML = "";
+  list.classList.toggle("hidden", agents.length === 0);
+  empty.classList.toggle("hidden", agents.length > 0);
+  manage.classList.toggle("hidden", !(currentUser && currentUser.role === "admin"));
+
+  agents.forEach((a) => {
+    const isActive = a.id === agentId;
+    const row = el("button", "agent-row" + (isActive ? " active" : ""));
+    row.type = "button";
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(isActive));
+    row.dataset.id = a.id;
+    row.innerHTML =
+      `<span class="agent-row-mark">${escapeHtml(agentMonogram(a.name))}</span>` +
+      `<span class="agent-row-body">` +
+      `<span class="agent-row-name">${escapeHtml(a.name)}` +
+      (isActive ? `<span class="agent-row-active-badge">Active</span>` : "") +
+      `</span>` +
+      (a.description ? `<span class="agent-row-desc">${escapeHtml(a.description)}</span>` : "") +
+      `<span class="agent-row-stats" data-stats-for="${a.id}">${statsLabel(agentStatsCache[a.id])}</span>` +
+      `</span>`;
+    row.addEventListener("click", () => {
+      closeAgentSwitcher();
+      switchAgent(a.id);
+    });
+    list.appendChild(row);
+  });
+
+  if (agentId && !agentStatsCache[agentId]) fetchAgentStats(agentId);
+}
+
+function isSwitcherOpen() {
+  return !$("#agent-switcher").classList.contains("hidden");
+}
+function focusSwitcherRow() {
+  const rows = $$(".agent-row");
+  rows.forEach((r, i) => r.classList.toggle("focused", i === switcherFocusIndex));
+  if (rows[switcherFocusIndex]) rows[switcherFocusIndex].scrollIntoView({ block: "nearest" });
+}
+function onSwitcherKey(e) {
+  const rows = $$(".agent-row");
+  if (e.key === "Escape") {
+    closeAgentSwitcher();
+    $("#agent-chip").focus();
+    return;
+  }
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    switcherFocusIndex = Math.min(switcherFocusIndex + 1, rows.length - 1);
+    focusSwitcherRow();
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    switcherFocusIndex = Math.max(switcherFocusIndex - 1, 0);
+    focusSwitcherRow();
+  } else if (e.key === "Home") {
+    e.preventDefault();
+    switcherFocusIndex = 0;
+    focusSwitcherRow();
+  } else if (e.key === "End") {
+    e.preventDefault();
+    switcherFocusIndex = rows.length - 1;
+    focusSwitcherRow();
+  } else if (e.key === "Enter" && rows[switcherFocusIndex]) {
+    e.preventDefault();
+    const id = rows[switcherFocusIndex].dataset.id;
+    closeAgentSwitcher();
+    switchAgent(id);
+  }
+}
+function openAgentSwitcher() {
+  renderAgentSwitcherList();
+  $("#agent-switcher").classList.remove("hidden");
+  $("#agent-chip").setAttribute("aria-expanded", "true");
+  switcherFocusIndex = agents.findIndex((a) => a.id === agentId);
+  focusSwitcherRow();
+  document.addEventListener("keydown", onSwitcherKey);
+}
+function closeAgentSwitcher() {
+  $("#agent-switcher").classList.add("hidden");
+  $("#agent-chip").setAttribute("aria-expanded", "false");
+  document.removeEventListener("keydown", onSwitcherKey);
+}
+
+$("#agent-chip").addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (isSwitcherOpen()) closeAgentSwitcher();
+  else openAgentSwitcher();
+});
+document.addEventListener("click", (e) => {
+  if (isSwitcherOpen() && !$(".masthead-center").contains(e.target)) closeAgentSwitcher();
+});
+
+/* ---------- theme toggle ---------- */
+$("#theme-toggle").title = `Theme: ${theme.get()}`;
+$("#theme-toggle").addEventListener("click", () => {
+  $("#theme-toggle").title = `Theme: ${theme.cycle()}`;
+});
 
 /* Switching agent swaps the whole workspace: its data, its conversations. */
 async function switchAgent(id) {
@@ -117,11 +290,17 @@ async function switchAgent(id) {
   sessionId = null;
   localStorage.removeItem(SESSION_KEY);
   resetThread();
-  renderAgentPicker();
+  // The preview dock, ingest log and pending file selection all belong to
+  // the agent being left — carrying them into the new one would silently
+  // show/act on the wrong agent's data.
+  closePreview();
+  $("#ingest-log").innerHTML = "";
+  $("#ingest-log-head").classList.add("hidden");
+  fileInput.value = "";
+  setFileName(null);
+  renderAgentChip();
   await init();
 }
-
-$("#agent-picker").addEventListener("change", (e) => switchAgent(e.target.value));
 
 $("#login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -144,6 +323,7 @@ $("#login-form").addEventListener("submit", async (e) => {
     showApp();
     init();
     setInterval(ping, 15000);
+    setInterval(syncIdentity, 60000);
   } catch {
     $("#login-error").classList.remove("hidden");
   } finally {
@@ -166,26 +346,14 @@ document.addEventListener("click", (e) => {
 });
 
 /* ---------- history collapse/expand ---------- */
-$("#history-toggle").addEventListener("click", () => {
+function toggleHistoryPanel() {
   const collapsed = $("#history-panel").classList.toggle("collapsed");
   $("#app-layout").classList.toggle("history-collapsed", collapsed);
   $("#history-toggle").setAttribute("aria-expanded", String(!collapsed));
-});
-
-/* ---------- tiny DOM helper ---------- */
-function el(tag, className) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  return node;
 }
+$("#history-toggle").addEventListener("click", toggleHistoryPanel);
 
 /* ---------- helpers ---------- */
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
-  );
-}
-
 // Safe markdown via marked + DOMPurify (both vendored).
 function renderMarkdown(s) {
   const parse = typeof marked.parse === "function" ? marked.parse : marked;
@@ -263,17 +431,8 @@ function escapePipes(v) {
   return String(v).replace(/\|/g, "\\|");
 }
 
-async function safeJson(r) {
-  const text = await r.text();
-  if (!text) return {};
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { detail: text.slice(0, 200) };
-  }
-}
-
 function logIngest(message, isError) {
+  $("#ingest-log-head").classList.remove("hidden");
   const item = el("div", "log-item" + (isError ? " err" : ""));
   item.textContent = message;
   const log = $("#ingest-log");
@@ -281,10 +440,51 @@ function logIngest(message, isError) {
   while (log.children.length > 8) log.lastChild.remove();
 }
 
+/* ---------- per-file upload progress rows ---------- */
+function ingestRowEl(filename) {
+  $("#ingest-log-head").classList.remove("hidden");
+  const row = el("div", "ingest-row");
+  row.innerHTML =
+    `<span class="ingest-row-name">${escapeHtml(filename)}</span>` +
+    `<span class="ingest-row-state ingest-row-state--queued">QUEUED</span>` +
+    `<span class="ingest-row-bar"><span class="ingest-row-bar-fill"></span></span>`;
+  $("#ingest-log").prepend(row);
+  return row;
+}
+
+// state: queued | extracting | stored | duplicate | error. The progress rule
+// (the thin animated bar) shows only while the file is still in flight, and
+// error rows are never auto-trimmed — they wait for "Clear".
+function setIngestRow(row, state, detail) {
+  const chip = row.querySelector(".ingest-row-state");
+  chip.textContent = state.toUpperCase();
+  chip.className = `ingest-row-state ingest-row-state--${state}`;
+  if (detail) {
+    let d = row.querySelector(".ingest-row-detail");
+    if (!d) {
+      d = el("span", "ingest-row-detail");
+      row.insertBefore(d, chip);
+    }
+    d.textContent = detail;
+  }
+  const bar = row.querySelector(".ingest-row-bar");
+  if (bar && state !== "queued" && state !== "extracting") bar.remove();
+}
+
+$("#ingest-clear").addEventListener("click", () => {
+  $("#ingest-log").innerHTML = "";
+  $("#ingest-log-head").classList.add("hidden");
+});
+
+// D4: the heading is the conversation's own title (truncated one line); the
+// sub-line names the active agent, since that's the thing a hex session id
+// never actually told the user.
+let currentSessionTitle = null;
+
 function setSessionLabel() {
-  $("#session-label").textContent = sessionId
-    ? `Session ${sessionId.slice(0, 8)}`
-    : "No active session";
+  const active = agents.find((a) => a.id === agentId);
+  $("#session-label").textContent = active ? `Active agent · ${active.name}` : "No agent selected";
+  $("#chat-title").textContent = sessionId && currentSessionTitle ? currentSessionTitle : "New conversation";
 }
 
 function relativeTime(iso) {
@@ -326,51 +526,25 @@ function previewOriginalUrl(name, type) {
 /* ---------- connection status ---------- */
 async function ping() {
   const dot = $("#status-dot");
+  const text = $("#status-text");
   try {
     const r = await fetch("/health");
     dot.className = r.ok ? "dot online" : "dot offline";
     dot.title = r.ok ? "online" : "offline";
+    if (text) text.textContent = r.ok ? "ONLINE" : "OFFLINE";
   } catch {
     dot.className = "dot offline";
     dot.title = "offline";
+    if (text) text.textContent = "OFFLINE";
   }
 }
 
-/* ---------- confirmation modal ---------- */
-function confirmDialog(text, sub) {
-  return new Promise((resolve) => {
-    const overlay = $("#confirm-overlay");
-    $("#confirm-text").textContent = text;
-    $("#confirm-sub").textContent = sub || "This cannot be undone.";
-    overlay.classList.remove("hidden");
-    const ok = $("#confirm-ok");
-    const cancel = $("#confirm-cancel");
-    const cleanup = (val) => {
-      overlay.classList.add("hidden");
-      ok.removeEventListener("click", onOk);
-      cancel.removeEventListener("click", onCancel);
-      overlay.removeEventListener("mousedown", onBackdrop);
-      document.removeEventListener("keydown", onKey);
-      resolve(val);
-    };
-    const onOk = () => cleanup(true);
-    const onCancel = () => cleanup(false);
-    const onBackdrop = (e) => e.target === overlay && cleanup(false);
-    const onKey = (e) => {
-      if (e.key === "Escape") cleanup(false);
-      if (e.key === "Enter") cleanup(true);
-    };
-    ok.addEventListener("click", onOk);
-    cancel.addEventListener("click", onCancel);
-    overlay.addEventListener("mousedown", onBackdrop);
-    document.addEventListener("keydown", onKey);
-    ok.focus();
-  });
-}
-
 /* ---------- session history sidebar ---------- */
+let sessionsCache = {}; // session_id -> title, refreshed on every loadSessions()
+
 async function loadSessions() {
   const list = $("#session-list");
+  skeletonRows(list, 3);
   let sessions = [];
   try {
     const r = await fetch(api("/sessions"));
@@ -383,7 +557,13 @@ async function loadSessions() {
     return;
   }
   list.innerHTML = "";
+  let titleChanged = false;
   sessions.forEach((s) => {
+    sessionsCache[s.session_id] = s.title;
+    if (s.session_id === sessionId && currentSessionTitle !== s.title) {
+      currentSessionTitle = s.title;
+      titleChanged = true;
+    }
     const item = el("div", "session-item" + (s.session_id === sessionId ? " active" : ""));
     item.setAttribute("role", "button");
     item.tabIndex = 0;
@@ -407,6 +587,7 @@ async function loadSessions() {
     });
     list.appendChild(item);
   });
+  if (titleChanged) setSessionLabel();
 }
 
 async function switchSession(id) {
@@ -414,6 +595,7 @@ async function switchSession(id) {
   hideSuggestions();
   sessionId = id;
   localStorage.setItem(SESSION_KEY, id);
+  currentSessionTitle = sessionsCache[id] || null;
   setSessionLabel();
   thread.innerHTML = "";
   await loadMessages(id);
@@ -453,8 +635,12 @@ const TRASH_SVG =
   `<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/>` +
   `<path d="M10 11v6M14 11v6"/></svg>`;
 
+let invoicesCache = [];
+let documentsCache = [];
+
 async function loadInvoices() {
   const list = $("#inv-list");
+  skeletonRows(list, 3);
   let invs = [];
   try {
     const r = await fetch(api("/invoices"));
@@ -462,6 +648,7 @@ async function loadInvoices() {
   } catch {
     return;
   }
+  invoicesCache = invs;
   $("#inv-count").textContent = invs.length
     ? `${invs.length} invoice${invs.length > 1 ? "s" : ""}`
     : "";
@@ -506,6 +693,7 @@ async function deleteInvoice(name, label) {
 async function loadDocuments() {
   const list = $("#doc-list");
   if (!list) return;
+  skeletonRows(list, 2);
   let docs = [];
   try {
     const r = await fetch(api("/documents"));
@@ -513,6 +701,7 @@ async function loadDocuments() {
   } catch {
     return;
   }
+  documentsCache = docs;
   const count = $("#doc-count");
   if (count) count.textContent = docs.length ? `${docs.length}` : "";
   if (!docs.length) {
@@ -838,9 +1027,8 @@ async function openPreview(name, label, type = "invoice") {
 }
 
 $("#preview-close").addEventListener("click", closePreview);
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !$("#preview-dock").hidden) closePreview();
-});
+// Highest Escape priority: dock -> palette -> shortcuts sheet (registerEscapable, core.js).
+registerEscapable(() => !$("#preview-dock").hidden, closePreview, 30);
 
 /* ---------- resizable splitter ---------- */
 (function initResizer() {
@@ -954,48 +1142,56 @@ async function uploadOne(file, onDuplicate) {
 
 // One file: interactive, so the user can resolve a duplicate.
 async function uploadSingle(file) {
+  const row = ingestRowEl(file.name);
+  setIngestRow(row, "extracting");
   let res = await uploadOne(file);
   if (res.status === 409) {
     const choice = await duplicateDialog(res.data.detail || {});
     if (!choice) {
-      logIngest(`↪ skipped duplicate ${file.name}`);
+      setIngestRow(row, "duplicate", "skipped");
       return 0;
     }
+    setIngestRow(row, "extracting");
     res = await uploadOne(file, choice);
   }
   if (res.status < 200 || res.status >= 300) {
-    logIngest(`✕ ${file.name}: ${res.data.detail?.message || res.data.detail || "failed"}`, true);
+    setIngestRow(row, "error", res.data.detail?.message || res.data.detail || "failed");
     return 0;
   }
   const d = res.data;
   if (d.kind === "document") {
-    logIngest(`✓ document stored: ${d.title || d.name}`);
+    setIngestRow(row, "stored", d.title || d.name);
   } else {
-    logIngest(`✓ ${d.invoice_no || d.name} — ${d.currency || ""} ${formatMoney(d.total_amount)}`);
+    setIngestRow(row, "stored", `${d.currency || ""} ${formatMoney(d.total_amount)}`.trim());
   }
   return 1;
 }
 
-// Many files: extracted concurrently server-side; duplicates skipped by default.
+// Many files: extracted concurrently server-side; duplicates skipped by
+// default. The backend resolves the whole batch at once (no streamed
+// progress), so every row shows EXTRACTING until the batch response lands,
+// then each flips to its own final state.
 async function uploadBulk(files) {
+  const rows = new Map(files.map((f) => [f.name, ingestRowEl(f.name)]));
+  rows.forEach((row) => setIngestRow(row, "extracting"));
+
   const fd = new FormData();
   files.forEach((f) => fd.append("files", f));
-  logIngest(`⟳ extracting ${files.length} invoices in parallel…`);
   const r = await fetch(api("/ingest/files"), { method: "POST", body: fd });
   const data = await safeJson(r);
   if (!r.ok) {
-    logIngest(`✕ bulk upload failed: ${data.detail || r.status}`, true);
+    rows.forEach((row) => setIngestRow(row, "error", data.detail || `HTTP ${r.status}`));
     return 0;
   }
   (data.results || []).forEach((res) => {
-    if (res.status === "duplicate") logIngest(`↪ duplicate skipped: ${res.invoice_no || res.filename}`);
-    else if (res.status === "error") logIngest(`✕ ${res.filename}: ${res.detail}`, true);
-    else if (res.status === "stored" && res.kind === "document")
-      logIngest(`✓ document stored: ${res.title || res.filename}`);
+    const row = rows.get(res.filename);
+    if (!row) return;
+    if (res.status === "duplicate") setIngestRow(row, "duplicate", res.invoice_no || "");
+    else if (res.status === "error") setIngestRow(row, "error", res.detail);
+    else if (res.status === "stored" && res.kind === "document") setIngestRow(row, "stored", res.title || "");
+    else if (res.status === "stored") setIngestRow(row, "stored", res.invoice_no || "");
   });
-  const s = data.summary;
-  logIngest(`✓ ${s.stored} stored · ${s.duplicates} duplicate(s) · ${s.errors} error(s)`);
-  return s.stored;
+  return data.summary.stored;
 }
 
 $("#file-form").addEventListener("submit", async (e) => {
@@ -1038,6 +1234,7 @@ function clearEmptyState() {
 
 function resetThread() {
   sessionId = null;
+  currentSessionTitle = null;
   localStorage.removeItem(SESSION_KEY);
   setSessionLabel();
   thread.innerHTML = buildEmptyStateHTML();
@@ -1197,6 +1394,12 @@ function buildChart(spec) {
   const canvas = document.createElement("canvas");
   box.appendChild(canvas);
 
+  // Read theme-aware colors at render time so a chart drawn in dark mode
+  // isn't stuck with light-mode grid/text/pie-border colors baked in.
+  const gridColor = cssVar("--chart-grid", "#ececec");
+  const textColor = cssVar("--chart-text", "#6b6b6b");
+  const pieBorder = cssVar("--chart-pie-border", "#ffffff");
+
   const isPie = spec.type === "pie";
   const isBar = spec.type === "bar";
   const cats = palette(spec.values.length);
@@ -1208,7 +1411,7 @@ function buildChart(spec) {
         label: spec.title,
         data: spec.values,
         backgroundColor: isPie || isBar ? cats : "rgba(78,121,167,0.14)",
-        borderColor: isPie ? "#ffffff" : accent,
+        borderColor: isPie ? pieBorder : accent,
         borderWidth: 2,
         fill: !isPie && !isBar,
         tension: 0.25,
@@ -1225,6 +1428,7 @@ function buildChart(spec) {
         position: "right",
         labels: {
           font: { family: "Inter" },
+          color: textColor,
           generateLabels(chart) {
             const data = chart.data;
             const ds = data.datasets[0].data;
@@ -1242,11 +1446,26 @@ function buildChart(spec) {
           },
         },
       },
-      title: { display: !!spec.title, text: spec.title, font: { family: "Inter", size: 13 } },
+      title: {
+        display: !!spec.title,
+        text: spec.title,
+        font: { family: "Inter", size: 13 },
+        color: textColor,
+      },
     },
     scales: isPie
       ? {}
-      : { y: { beginAtZero: true, grid: { color: "#ececec" } }, x: { grid: { display: false } } },
+      : {
+          y: {
+            beginAtZero: true,
+            grid: { color: gridColor },
+            ticks: { color: textColor },
+          },
+          x: {
+            grid: { display: false },
+            ticks: { color: textColor },
+          },
+        },
   };
   new Chart(canvas.getContext("2d"), { type: spec.type, data, options });
 
@@ -1275,7 +1494,9 @@ askInput.addEventListener("input", () => {
   askInput.style.height = Math.min(askInput.scrollHeight, 140) + "px";
 });
 askInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) {
+  // Enter sends (Shift+Enter makes a newline); Ctrl/Cmd+Enter always sends
+  // too, for anyone used to that convention from other composers.
+  if ((e.key === "Enter" && !e.shiftKey) || (e.key === "Enter" && (e.ctrlKey || e.metaKey))) {
     e.preventDefault();
     $("#ask-form").requestSubmit();
   }
@@ -1283,6 +1504,7 @@ askInput.addEventListener("keydown", (e) => {
 
 async function sendQuestion(question) {
   if (!question) return;
+  const wasNewSession = !sessionId;
   hideSuggestions();
   addMessage("user", question);
   askInput.value = "";
@@ -1302,6 +1524,12 @@ async function sendQuestion(question) {
     if (data.session_id) {
       sessionId = data.session_id;
       localStorage.setItem(SESSION_KEY, sessionId);
+      // Mirrors how the backend derives a session's title (its first user
+      // message) so the heading is right immediately, with no extra fetch.
+      if (wasNewSession) {
+        currentSessionTitle = question.length > 80 ? question.slice(0, 80) + "…" : question;
+        sessionsCache[sessionId] = currentSessionTitle;
+      }
       setSessionLabel();
     }
     addMessage("assistant", data.answer || "(no answer)", data.chart, data.sources, data.aggregated, data.doc_sources);
@@ -1321,40 +1549,39 @@ $("#ask-form").addEventListener("submit", (e) => {
 });
 
 /* ---------- suggestions + saved questions ---------- */
-const QUESTIONS_CSV_URL = "/static/questions.csv";
 const SUGGESTION_COUNT = 3;
 
+// Used only if the agent's own suggestions can't be fetched at all (offline,
+// server error) — the server itself falls back to the same finance defaults
+// when an agent has no admin-configured list (see DEFAULT_SUGGESTIONS,
+// app/agent.py).
 const FALLBACK_SAMPLES = [
   "Give total tax amount from all invoices",
   "State wise sales pie chart",
   "Company growth line chart by month by sales",
 ];
 
-let csvQuestions = [];
+let agentQuestions = [];
+let suggestionsCache = {}; // agentId -> questions[] — fetched once per agent per session (R16)
 
-function parseQuestionsCsv(text) {
-  return text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) =>
-      line.startsWith('"') && line.endsWith('"')
-        ? line.slice(1, -1).replace(/""/g, '"')
-        : line
-    )
-    .filter((line) => !/^questions?$/i.test(line));
-}
-
-async function loadCsvQuestions() {
-  try {
-    const r = await fetch(QUESTIONS_CSV_URL);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    csvQuestions = parseQuestionsCsv(await r.text());
-    if (!csvQuestions.length) throw new Error("empty");
-  } catch (err) {
-    console.warn(`[suggestions] questions.csv unavailable (${err.message}); using fallback samples.`);
-    csvQuestions = FALLBACK_SAMPLES.slice();
+async function loadSuggestions() {
+  if (suggestionsCache[agentId]) {
+    agentQuestions = suggestionsCache[agentId];
+    return;
   }
+  try {
+    const r = await fetch(api("/suggestions"));
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    agentQuestions =
+      Array.isArray(data.questions) && data.questions.length
+        ? data.questions
+        : FALLBACK_SAMPLES.slice();
+  } catch (err) {
+    console.warn(`[suggestions] unavailable (${err.message}); using fallback samples.`);
+    agentQuestions = FALLBACK_SAMPLES.slice();
+  }
+  suggestionsCache[agentId] = agentQuestions;
 }
 
 function pickRandom(arr, n) {
@@ -1382,7 +1609,7 @@ function sampleChip(q) {
 function renderSuggestions() {
   const box = $("#suggestions");
   if (!box) return;
-  if (sessionId || !csvQuestions.length) {
+  if (sessionId || !agentQuestions.length) {
     hideSuggestions();
     return;
   }
@@ -1390,7 +1617,7 @@ function renderSuggestions() {
   const label = el("span", "suggestions-label");
   label.textContent = "Try asking";
   box.appendChild(label);
-  pickRandom(csvQuestions, SUGGESTION_COUNT).forEach((q) => box.appendChild(sampleChip(q)));
+  pickRandom(agentQuestions, SUGGESTION_COUNT).forEach((q) => box.appendChild(sampleChip(q)));
   box.classList.remove("hidden");
 }
 
@@ -1401,19 +1628,40 @@ function hideSuggestions() {
   box.innerHTML = "";
 }
 
-const SAVED_KEY = "invoice-agent.saved";
+// Namespaced per user + agent, so saved questions never leak between
+// accounts on a shared browser and each agent gets its own list.
+const SAVED_KEY_LEGACY = "invoice-agent.saved"; // pre-multi-agent: one global list
 const SYNC_SAVED_TO_SERVER = false;
 const SAVE_QUESTION_ENDPOINT = "/save_question";
 
+function savedKey() {
+  const user = sessionStorage.getItem(AUTH_USER_KEY) || "anon";
+  return `${SAVED_KEY_LEGACY}.${user}.${agentId || "none"}`;
+}
+
+// One-time migration: adopt the old global list into this user+agent's
+// namespaced key, then remove it so it can't leak to anyone else.
+function migrateLegacySaved() {
+  try {
+    const legacy = localStorage.getItem(SAVED_KEY_LEGACY);
+    if (legacy == null) return;
+    const key = savedKey();
+    if (localStorage.getItem(key) == null) localStorage.setItem(key, legacy);
+    localStorage.removeItem(SAVED_KEY_LEGACY);
+  } catch {
+    /* storage unavailable — nothing to migrate */
+  }
+}
+
 function getSaved() {
   try {
-    return JSON.parse(localStorage.getItem(SAVED_KEY)) || [];
+    return JSON.parse(localStorage.getItem(savedKey())) || [];
   } catch {
     return [];
   }
 }
 function setSaved(list) {
-  localStorage.setItem(SAVED_KEY, JSON.stringify(list));
+  localStorage.setItem(savedKey(), JSON.stringify(list));
 }
 
 async function persistSavedQuestion(text) {
@@ -1433,7 +1681,7 @@ async function saveQuestion(text) {
   text = (text || "").trim();
   if (!text) return;
   const list = getSaved();
-  if (list.includes(text) || csvQuestions.includes(text)) return; // no dupes
+  if (list.includes(text) || agentQuestions.includes(text)) return; // no dupes
   list.unshift(text);
   setSaved(list);
   renderSaved();
@@ -1580,12 +1828,105 @@ function downloadCSV(csv, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/* ---------- command palette + shortcuts ----------
+   Built entirely from state already loaded for the visible page — no fetch
+   fires when the palette opens or as you type (core.js's renderPaletteRows
+   just filters this list client-side). */
+function buildPaletteActions() {
+  const actions = [];
+
+  agents.forEach((a) => {
+    if (a.id === agentId) return; // already active
+    actions.push({
+      group: "Switch agent",
+      label: a.name,
+      hint: a.description || "",
+      action: () => switchAgent(a.id),
+    });
+  });
+
+  actions.push({
+    group: "Chat",
+    label: "New conversation",
+    action: () => {
+      resetThread();
+      loadSessions();
+      askInput.focus();
+    },
+  });
+
+  Object.entries(sessionsCache)
+    .slice(0, 20)
+    .forEach(([id, title]) => {
+      if (id === sessionId) return;
+      actions.push({
+        group: "Conversations",
+        label: title || "Untitled conversation",
+        action: () => switchSession(id),
+      });
+    });
+
+  invoicesCache.slice(0, 30).forEach((d) => {
+    actions.push({
+      group: "Invoices",
+      label: d.invoice_no || d.name,
+      hint: d.buyer_state || "",
+      action: () => openPreview(d.name, d.invoice_no || d.name),
+    });
+  });
+
+  documentsCache.slice(0, 30).forEach((d) => {
+    actions.push({
+      group: "Documents",
+      label: d.title || d.name,
+      action: () => openPreview(d.name, d.title || d.name, "document"),
+    });
+  });
+
+  actions.push({ group: "View", label: "Toggle sidebar", hint: "Ctrl/Cmd+B", action: toggleHistoryPanel });
+  actions.push({
+    group: "View",
+    label: `Cycle theme (currently ${theme.get()})`,
+    hint: "light · dark · system",
+    action: () => {
+      $("#theme-toggle").title = `Theme: ${theme.cycle()}`;
+    },
+  });
+
+  if (currentUser && currentUser.role === "admin") {
+    actions.push({ group: "Admin", label: "Open admin console", action: () => (location.href = "/admin") });
+  }
+  actions.push({ group: "Account", label: "Log out", action: () => { clearToken(); location.reload(); } });
+
+  return actions;
+}
+setPaletteActions(buildPaletteActions);
+
+function buildShortcutsList() {
+  return [
+    ["Command palette", [MOD_KEY, "K"]],
+    ["Shortcuts (this sheet)", [MOD_KEY, "/"]],
+    ["Send question", ["Enter"]],
+    ["New line in composer", ["Shift", "Enter"]],
+    ["Toggle sidebar", [MOD_KEY, "B"]],
+    ["Close preview / palette / sheet", ["Esc"]],
+  ];
+}
+
+document.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "b") {
+    e.preventDefault();
+    toggleHistoryPanel();
+  }
+});
+
 /* ---------- init ---------- */
 async function init() {
   setSessionLabel();
   ping();
   if (!agentId) return; // user has no agent granted — nothing to load
-  await loadCsvQuestions();
+  migrateLegacySaved();
+  await loadSuggestions();
   renderSaved();
   await restoreSession();
   loadSessions();
@@ -1594,14 +1935,24 @@ async function init() {
 }
 
 async function boot() {
-  const token = sessionStorage.getItem(AUTH_KEY);
-  if (token && (await loadMe())) {
+  const token = getToken();
+  if (!token) {
+    // Nothing to verify — go straight to the login gate, no splash needed.
+    showLogin();
+    return;
+  }
+  // A token exists: hold on the boot splash (never the login modal) while it
+  // is verified, so a returning signed-in user never sees a login flash.
+  $("#boot-splash").classList.remove("hidden");
+  const ok = await loadMe();
+  if (ok) {
     // Refresh the cookie so browser-native requests (previews/downloads) stay
     // authenticated after a page reload, not just right after login.
     storeToken(token);
     showApp();
     init();
     setInterval(ping, 15000);
+    setInterval(syncIdentity, 60000);
   } else {
     clearToken();
     showLogin();

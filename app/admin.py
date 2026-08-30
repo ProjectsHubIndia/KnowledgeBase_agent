@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent import DEFAULT_PERSONA
+from app.agent import DEFAULT_PERSONA, TOOL_CONTRACT
 from app.auth import CurrentUser, require_admin
 from app.db import Agent, ChatSession, User, UserAgent, get_session
 from app.schemas import (
@@ -48,10 +48,18 @@ def _agent_out(agent: Agent) -> AgentOut:
         is_active=agent.is_active,
         invoice_count=len(store.list_invoices()),
         document_count=len(store.list_documents()),
+        suggestions=agent.suggestions,
     )
 
 
 # ---------- agents ----------
+
+
+@router.get("/defaults")
+async def agent_defaults() -> dict:
+    """The two halves of every agent's prompt, for the console to prefill a
+    new agent and to display the non-editable tool contract alongside it."""
+    return {"default_persona": DEFAULT_PERSONA, "tool_contract": TOOL_CONTRACT}
 
 
 @router.get("/agents", response_model=list[AgentOut])
@@ -74,6 +82,8 @@ async def agent_create(
         name=name,
         description=(body.description or "").strip() or None,
         system_prompt=(body.system_prompt or "").strip() or DEFAULT_PERSONA,
+        is_active=body.is_active,
+        suggestions=(body.suggestions or "").strip() or None,
     )
     session.add(agent)
     await session.commit()
@@ -99,6 +109,8 @@ async def agent_update(
         agent.system_prompt = body.system_prompt.strip()
     if body.is_active is not None:
         agent.is_active = body.is_active
+    if body.suggestions is not None:
+        agent.suggestions = body.suggestions.strip() or None
     await session.commit()
     return _agent_out(agent)
 

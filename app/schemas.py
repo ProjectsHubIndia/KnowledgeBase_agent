@@ -90,6 +90,19 @@ class MeResponse(BaseModel):
     agents: list[AgentSummary] = []
 
 
+class AgentStats(BaseModel):
+    """Fetched lazily for the selected agent only — never bundled into
+    AgentSummary/MeResponse, since computing it reads and parses every
+    invoice/document file on disk (see AgentStore.list_invoices)."""
+
+    invoices: int
+    documents: int
+
+
+class AgentSuggestions(BaseModel):
+    questions: list[str]
+
+
 # ---------- admin ----------
 class AgentOut(AgentSummary):
     """Full agent record for the admin console, including the editable prompt."""
@@ -98,12 +111,15 @@ class AgentOut(AgentSummary):
     is_active: bool = True
     invoice_count: int = 0
     document_count: int = 0
+    suggestions: str | None = None  # newline-separated; None falls back to a default list
 
 
 class AgentCreate(BaseModel):
     name: str
     description: str | None = None
     system_prompt: str | None = None  # falls back to the default persona
+    is_active: bool = True
+    suggestions: str | None = None
 
 
 class AgentUpdate(BaseModel):
@@ -111,6 +127,7 @@ class AgentUpdate(BaseModel):
     description: str | None = None
     system_prompt: str | None = None
     is_active: bool | None = None
+    suggestions: str | None = None
 
 
 class UserCreate(BaseModel):
