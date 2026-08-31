@@ -72,3 +72,26 @@ IF IT'S SLUGGISH OR CRASHES
   - This box is at its limit. A bigger instance (2+ GB) removes all of
     this pain — this tuning is only to survive on 500 MB.
 ============================================================
+
+============================================================
+  UPGRADING TO 0.2.0 (multi-agent)
+============================================================
+
+  0.2.0 adds multiple agents, an admin console and per-person
+  logins. Upgrading an existing server:
+
+    cd ~/finance-agent
+    # add JWT_SECRET to .env so people stay signed in across
+    # restarts (any long random string):
+    echo "JWT_SECRET=$(openssl rand -base64 36)" >> .env
+
+    docker compose -f docker-compose.server.yml pull
+    docker compose -f docker-compose.server.yml up -d
+
+  Your existing invoices are moved automatically into a default
+  "Invoice Analyst" agent on first start — nothing is lost, and
+  you do not need to re-upload anything.
+
+  Your existing AUTH_USERNAME / AUTH_PASSWORD becomes the ADMIN
+  account. Open http://<server-ip>:9000/admin to add agents and
+  create logins for other people.

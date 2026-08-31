@@ -98,12 +98,17 @@ Or run the published image against your own Postgres:
 ```bash
 docker run -p 9001:9001 \
   -e LLM_API_KEY=sk-... \
+  -e JWT_SECRET=some-long-random-string \
+  -e AUTH_USERNAME=admin -e AUTH_PASSWORD=change-me \
   -e DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/agentvector \
   -v "$PWD/invoice_data:/app/invoice_data" \
   bhutiyalakhan/invoice-agent:latest
 ```
 
-Image: **`bhutiyalakhan/invoice-agent`** on Docker Hub (`:latest`, `:0.1.0`).
+Image: **`bhutiyalakhan/invoice-agent`** on Docker Hub (`:latest`, `:0.2.0`).
+`0.2.0` is the first multi-agent release — it adds the admin console, per-user
+JWT login and per-agent data folders, and migrates existing invoices into the
+default agent on first boot.
 
 ## Ship as a turnkey app (`dist/`)
 

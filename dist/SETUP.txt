@@ -28,13 +28,33 @@ STEP 2 — START (OR UPDATE) THE APP
   When it says "up to date", you are done.
 
 
-STEP 3 — OPEN THE APP
+STEP 3 — SIGN IN
   Your browser opens automatically at:
 
             http://localhost:9000
 
   If it doesn't, open your browser and go there yourself.
-  Upload your invoices or finance documents and start asking.
+
+  Sign in with the username and password from your .env file
+  (AUTH_USERNAME / AUTH_PASSWORD). That first account is the
+  ADMIN. Upload your invoices or finance documents and start
+  asking questions.
+
+
+STEP 4 — (OPTIONAL) MORE AGENTS AND MORE PEOPLE
+  As the admin you get an "Admin console" item in the menu at
+  the bottom-left, or go straight to:
+
+            http://localhost:9000/admin
+
+  There you can:
+    - Create extra agents. Each agent has its own instructions
+      and its OWN separate set of documents — nothing is shared
+      between them.
+    - Create logins for other people and tick exactly which
+      agents each person is allowed to use.
+
+  Everyone picks their agent from the dropdown at the top-left.
 
 
 UPDATING LATER
